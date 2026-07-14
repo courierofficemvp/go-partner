@@ -36,7 +36,7 @@ BASE_HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GO PARTNER Manager 4.21 ING BANK</title>
+<title>GO PARTNER Manager 4.22 RENDER FIX</title>
 <style>
 :root{--bg:#f4f6fa;--panel:#fff;--line:#e5e7eb;--text:#111827;--muted:#6b7280;--blue:#2563eb;--red:#b91c1c;--green:#166534}
 *{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
@@ -54,7 +54,7 @@ table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px s
 <body>
 <div class="app">
 <aside class="side">
-<div class="logo">GO PARTNER<br><small>Manager 4.21 ING BANK</small></div>
+<div class="logo">GO PARTNER<br><small>Manager 4.22 RENDER FIX</small></div>
 <a href="/">Dashboard</a>
 <a href="/drivers">Kierowcy</a>
 <a href="/settlements/new">Nowe rozliczenie</a>
@@ -2776,6 +2776,9 @@ def logs():
 def backup():
     return send_file(DB_PATH, as_attachment=True, download_name="go_partner.db")
 
+# Inicjalizacja bazy musi wykonać się także przy starcie przez Gunicorn/Render.
+# Gunicorn importuje moduł jako `app:app` i nie uruchamia bloku __main__.
+init_db()
+
 if __name__=="__main__":
-    init_db()
     app.run(host="0.0.0.0", port=8501, debug=False, threaded=False)
