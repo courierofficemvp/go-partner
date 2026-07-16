@@ -37,7 +37,7 @@ BASE_HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GO PARTNER Manager 4.25 CYKLICZNE FIX</title>
+<title>GO PARTNER Manager 4.26 CANCELLED PLANS FIX</title>
 <style>
 :root{--bg:#f4f6fa;--panel:#fff;--line:#e5e7eb;--text:#111827;--muted:#6b7280;--blue:#2563eb;--red:#b91c1c;--green:#166534}
 *{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
@@ -818,8 +818,10 @@ def pending_cost_balance(key):
     return sum((r["amount"] if r["entry_type"]=="BONUS" else -r["amount"]) for r in rows)
 
 
-def installment_plans_for_driver(key, active_only=False):
+def installment_plans_for_driver(key, active_only=False, include_cancelled=False):
     sql="SELECT * FROM installment_plans WHERE driver_key=?"
+    if not include_cancelled:
+        sql+=" AND COALESCE(cancelled_at,'')=''"
     if active_only:
         sql+=" AND active=1"
     sql+=" ORDER BY active DESC,id DESC"
@@ -840,7 +842,9 @@ def damage_summary_for_driver(key):
     with db() as c:
         plans = c.execute("""
         SELECT * FROM installment_plans
-        WHERE driver_key=? AND category IN ('SZKODA', 'DŁUG')
+        WHERE driver_key=?
+          AND category IN ('SZKODA', 'DŁUG')
+          AND COALESCE(cancelled_at,'')=''
         ORDER BY id
         """, (key,)).fetchall()
 
@@ -866,7 +870,9 @@ def deposit_summary_for_driver(key):
     with db() as c:
         plans = c.execute("""
         SELECT * FROM installment_plans
-        WHERE driver_key=? AND category='KAUCJA'
+        WHERE driver_key=?
+          AND category='KAUCJA'
+          AND COALESCE(cancelled_at,'')=''
         ORDER BY id
         """, (key,)).fetchall()
         returns = c.execute("""
@@ -1565,7 +1571,7 @@ def driver(key):
     </div>
 
     <div class="card">
-      <h3>Aktywne i zakończone plany</h3>
+      <h3>Aktywne i zakończone plany (bez anulowanych)</h3>
       {% if plans %}
       <table><tr><th>Nazwa</th><th>Kategoria</th><th>Cała kwota</th><th>Wpłata początkowa</th><th>Pobrano z rozliczeń</th><th>Pozostało</th><th>Rata tygodniowa</th><th>Status</th><th></th></tr>
       {% for p in plans %}
@@ -1713,10 +1719,30 @@ def cancel_installment_plan(key, plan_id):
         if not plan:
             flash("Nie znaleziono planu.")
             return redirect(url_for("driver",key=key,tab="recurring"))
-        c.execute("UPDATE installment_plans SET active=0,cancelled_at=?,cancel_comment=? WHERE id=?",(datetime.now().isoformat(timespec="seconds"),"Anulowano ręcznie",plan_id))
-        pending=c.execute("""SELECT dc.id FROM scheduled_occurrences so JOIN driver_costs dc ON dc.id=so.cost_id WHERE so.kind='RATA_TYGODNIOWA' AND so.source_id=? AND dc.applied_settlement_id IS NULL""",(plan_id,)).fetchall()
-        for row in pending: c.execute("DELETE FROM driver_costs WHERE id=?",(row['id'],))
-        log("Anulowano plan ratalny",f"{key}: {plan['title']}",connection=c)
+        c.execute(
+            "UPDATE installment_plans SET active=0,cancelled_at=?,cancel_comment=? WHERE id=?",
+            (datetime.now().isoformat(timespec="seconds"),"Anulowano ręcznie",plan_id)
+        )
+
+        pending=c.execute("""
+        SELECT so.id AS occurrence_id, dc.id AS cost_id
+        FROM scheduled_occurrences so
+        LEFT JOIN driver_costs dc ON dc.id=so.cost_id
+        WHERE so.kind='RATA_TYGODNIOWA'
+          AND so.source_id=?
+          AND (dc.applied_settlement_id IS NULL OR dc.id IS NULL)
+        """,(plan_id,)).fetchall()
+
+        for row in pending:
+            if row["cost_id"]:
+                c.execute("DELETE FROM driver_costs WHERE id=?",(row["cost_id"],))
+            c.execute("DELETE FROM scheduled_occurrences WHERE id=?",(row["occurrence_id"],))
+
+        log(
+            "Anulowano plan ratalny",
+            f"{key}: {plan['title']}; usunięto oczekujące raty: {len(pending)}",
+            connection=c
+        )
     flash("Plan został anulowany.")
     return redirect(url_for("driver",key=key,tab="recurring"))
 
@@ -1724,8 +1750,11 @@ def cancel_installment_plan(key, plan_id):
 def toggle_installment_plan(key,plan_id):
     with db() as c:
         plan=c.execute("SELECT * FROM installment_plans WHERE id=? AND driver_key=?",(plan_id,key)).fetchone()
-        if plan:
+        if plan and not plan["cancelled_at"]:
             c.execute("UPDATE installment_plans SET active=? WHERE id=?",(0 if plan["active"] else 1,plan_id))
+        elif plan and plan["cancelled_at"]:
+            flash("Anulowanego planu nie można wznowić.")
+            return redirect(url_for("driver",key=key,tab="recurring"))
     flash("Status planu został zmieniony.")
     return redirect(url_for("driver",key=key,tab="recurring"))
 
