@@ -37,7 +37,7 @@ BASE_HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GO PARTNER Manager 4.23 ADMIN & ARCHIVE</title>
+<title>GO PARTNER Manager 4.24 ISO WEEK FIX</title>
 <style>
 :root{--bg:#f4f6fa;--panel:#fff;--line:#e5e7eb;--text:#111827;--muted:#6b7280;--blue:#2563eb;--red:#b91c1c;--green:#166534}
 *{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
@@ -430,9 +430,29 @@ def extract_period_from_filename(filename):
     - Uber: 20260706-20260713-payments_driver...
       Druga data Uber jest traktowana jako koniec wyłączny,
       dlatego zapisujemy 06.07.2026–12.07.2026.
+    - Raport tygodniowy: Zarobki na kierowcę-2026W28-...
+      Numer tygodnia ISO jest zamieniany na poniedziałek–niedzielę.
     - Bolt: ...-6 lip 2026-12 lip 2026-...
     """
-    name = filename.lower()
+    # Normalizacja Unicode usuwa różnicę między „ę” a „e” + znak łączący.
+    name = unicodedata.normalize("NFC", filename).lower()
+
+    iso_week_match = re.search(
+        r"(?<!\d)(20\d{2})\s*[-_ ]?w\s*(\d{1,2})(?!\d)",
+        name,
+        flags=re.IGNORECASE,
+    )
+    if iso_week_match:
+        year = int(iso_week_match.group(1))
+        week = int(iso_week_match.group(2))
+        try:
+            start = date.fromisocalendar(year, week, 1)
+            end = date.fromisocalendar(year, week, 7)
+        except ValueError:
+            raise ValueError(
+                f"Nieprawidłowy numer tygodnia ISO w nazwie pliku: {filename}"
+            )
+        return start, end, "Tydzień ISO"
 
     uber_match = re.search(r"(?<!\d)(20\d{6})-(20\d{6})(?!\d)", name)
     if uber_match:
@@ -480,7 +500,8 @@ def detect_period(files):
         raise ValueError(
             "Nie udało się automatycznie odczytać okresu z nazwy pliku: "
             + ", ".join(missing)
-            + ". Pobierz plik bez zmiany jego oryginalnej nazwy."
+            + ". Obsługiwane są nazwy z zakresem dat, np. "
+            "20260706-20260713, albo z tygodniem ISO, np. 2026W28."
         )
 
     starts = {item[1] for item in periods}
