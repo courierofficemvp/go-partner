@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import re
 import sqlite3
 import unicodedata
@@ -12,7 +13,7 @@ import calendar
 import math
 from pathlib import Path
 from werkzeug.utils import secure_filename
-from flask import Flask, request, redirect, url_for, render_template_string, send_file, flash
+from flask import Flask, request, redirect, url_for, render_template_string, send_file, flash, session
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -28,7 +29,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_RETURN_FILES = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 
 app = Flask(__name__)
-app.secret_key = "go-partner-local-dev"
+app.secret_key = os.environ.get("SECRET_KEY", "go-partner-admin-test-secret")
 
 BASE_HTML = """
 <!doctype html>
@@ -36,7 +37,7 @@ BASE_HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GO PARTNER Manager 4.22 RENDER FIX</title>
+<title>GO PARTNER Manager 4.23 ADMIN & ARCHIVE</title>
 <style>
 :root{--bg:#f4f6fa;--panel:#fff;--line:#e5e7eb;--text:#111827;--muted:#6b7280;--blue:#2563eb;--red:#b91c1c;--green:#166534}
 *{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
@@ -46,7 +47,7 @@ BASE_HTML = """
 .metric b{display:block;font-size:24px;margin-top:5px}.muted{color:var(--muted)}input,select,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:9px}.field{display:flex;flex-direction:column;gap:6px}
 .btn{display:inline-block;border:0;border-radius:9px;padding:10px 14px;text-decoration:none;cursor:pointer;background:#e5e7eb;color:#111}.primary{background:var(--blue);color:#fff}.danger{background:#fee2e2;color:#991b1b}
 table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}th{background:#f8fafc}.right{text-align:right}
-.badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:700}.on{background:#dcfce7;color:#166534}.off{background:#fee2e2;color:#991b1b}
+.badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:700}.on{background:#dcfce7;color:#166534}.off{background:#fee2e2;color:#991b1b}.arch{background:#e5e7eb;color:#374151}.login-wrap{max-width:420px;margin:8vh auto}.progress{height:10px;background:#e5e7eb;border-radius:999px;overflow:hidden}.progress span{display:block;height:100%;background:#2563eb}
 .flash{padding:10px 14px;border-radius:9px;background:#dbeafe;margin-bottom:12px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.tabs{display:flex;gap:8px;border-bottom:1px solid var(--line);margin:14px 0}.tabs a{padding:10px 12px;text-decoration:none;color:#374151}.tabs a.active{color:var(--blue);border-bottom:2px solid var(--blue);font-weight:700}.pos{color:#166534;font-weight:700}.neg{color:#b91c1c;font-weight:700}
 @media(max-width:900px){.app{grid-template-columns:1fr}.g4,.g3,.g2{grid-template-columns:1fr}}
 </style>
@@ -54,12 +55,13 @@ table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px s
 <body>
 <div class="app">
 <aside class="side">
-<div class="logo">GO PARTNER<br><small>Manager 4.22 RENDER FIX</small></div>
+<div class="logo">GO PARTNER<br><small>Manager 4.21 ING BANK</small></div>
 <a href="/">Dashboard</a>
 <a href="/drivers">Kierowcy</a>
 <a href="/settlements/new">Nowe rozliczenie</a>
 <a href="/history">Historia</a>
 <a href="/logs">Logi</a>
+<a href="/logout">Wyloguj</a>
 </aside>
 <main class="main">
 {% with messages = get_flashed_messages() %}
@@ -257,6 +259,9 @@ def init_db():
         ensure_column(c, "drivers", "bolt_id", "TEXT DEFAULT ''")
         ensure_column(c, "settlement_rows", "b2b_fee", "REAL DEFAULT 0")
         ensure_column(c, "drivers", "bank_account", "TEXT DEFAULT ''")
+        ensure_column(c, "drivers", "status", "TEXT DEFAULT 'AKTYWNY'")
+        ensure_column(c, "installment_plans", "cancelled_at", "TEXT DEFAULT ''")
+        ensure_column(c, "installment_plans", "cancel_comment", "TEXT DEFAULT ''")
         c.execute("""
         INSERT OR IGNORE INTO bank_export_settings(
           id,source_account,payer_name,payer_address1,payer_address2,default_title
@@ -311,8 +316,10 @@ def valid_polish_account(value):
     nrb = normalize_bank_account(value)
     if len(nrb) != 26 or not nrb.isdigit():
         return False
-    # Polish IBAN validation: PL + 26 digits, moved country code to the end.
-    return int(nrb + "2521") % 97 == 1
+    iban = "PL" + nrb
+    rearranged = iban[4:] + iban[:4]
+    numeric = "".join(str(ord(ch)-55) if ch.isalpha() else ch for ch in rearranged)
+    return int(numeric) % 97 == 1
 
 
 def bank_routing_number(value):
@@ -668,6 +675,37 @@ def aggregate(rows):
     for x in m.values(): x["platforms"]=", ".join(sorted(x["platforms"]))
     return list(m.values())
 
+
+@app.before_request
+def require_login():
+    if request.endpoint in {"login", "static"}:
+        return None
+    if not session.get("authenticated"):
+        return redirect(url_for("login", next=request.path))
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        if request.form.get("login") == "admin" and request.form.get("password") == "admin":
+            session["authenticated"] = True
+            return redirect(request.args.get("next") or "/")
+        flash("Nieprawidłowy login lub hasło.")
+    return render("""
+    <div class="login-wrap"><div class="card">
+      <h2>GO PARTNER</h2><p class="muted">Logowanie do systemu</p>
+      <form method="post">
+        <div class="field"><label>Login</label><input name="login" required></div>
+        <div class="field"><label>Hasło</label><input type="password" name="password" required></div><br>
+        <button class="btn primary" style="width:100%">Zaloguj</button>
+      </form><p class="muted">Test: admin / admin</p>
+    </div></div>
+    """)
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
 @app.route("/")
 def dashboard():
     with db() as c:
@@ -677,7 +715,7 @@ def dashboard():
         fees=c.execute("SELECT COALESCE(SUM(partner_commission+rental+b2b_fee),0) FROM settlement_rows").fetchone()[0]
         recent=c.execute("SELECT * FROM settlements ORDER BY id DESC LIMIT 10").fetchall()
     return render("""
-    <h2>Dashboard</h2>
+    <div class="row" style="justify-content:space-between"><h2>Dashboard</h2><a class="btn" href="/">Odśwież</a></div>
     <div class="grid g4">
       <div class="card metric"><span class="muted">Aktywni kierowcy</span><b>{{active}}</b></div>
       <div class="card metric"><span class="muted">Rozliczenia</span><b>{{count}}</b></div>
@@ -690,6 +728,41 @@ def dashboard():
     {% else %}<div class="muted">Brak danych.</div>{% endif %}</div>
     """, active=active,count=count,payable=payable,fees=fees,recent=recent,money=money)
 
+
+@app.route("/drivers/new", methods=["GET", "POST"])
+def new_driver():
+    if request.method == "POST":
+        name = f"{request.form.get('first_name','').strip()} {request.form.get('last_name','').strip()}".strip()
+        if not name:
+            flash("Wpisz imię i nazwisko kierowcy.")
+            return redirect("/drivers/new")
+        key = norm_name(name)
+        with db() as c:
+            if c.execute("SELECT 1 FROM drivers WHERE driver_key=?", (key,)).fetchone():
+                flash("Kierowca już istnieje.")
+                return redirect(url_for("driver", key=key))
+            status=request.form.get("status","AKTYWNY")
+            c.execute("""INSERT INTO drivers(driver_key,driver_name,phone,email,car,bank_account,status,active,partner_commission,rental,other,scheme_type,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",(key,name,request.form.get('phone',''),request.form.get('email',''),request.form.get('car',''),normalize_bank_account(request.form.get('bank_account','')),status,1 if status=='AKTYWNY' else 0,num(request.form.get('partner_commission')),num(request.form.get('rental')),num(request.form.get('other')),request.form.get('scheme_type','BRAK'),datetime.now().isoformat(timespec='seconds')))
+            log("Dodano kierowcę ręcznie", name, connection=c)
+        flash("Kierowca został dodany.")
+        return redirect(url_for("driver", key=key))
+    return render("""
+    <div class="row" style="justify-content:space-between"><h2>Dodaj kierowcę ręcznie</h2><a class="btn" href="/drivers">Powrót</a></div>
+    <div class="card"><form method="post"><div class="grid g3">
+      <div class="field"><label>Imię</label><input name="first_name" required></div>
+      <div class="field"><label>Nazwisko</label><input name="last_name" required></div>
+      <div class="field"><label>Telefon</label><input name="phone"></div>
+      <div class="field"><label>E-mail</label><input name="email"></div>
+      <div class="field"><label>Samochód</label><input name="car"></div>
+      <div class="field"><label>Numer konta / IBAN</label><input name="bank_account"></div>
+      <div class="field"><label>Prowizja ręczna</label><input name="partner_commission" value="0"></div>
+      <div class="field"><label>Wynajem tygodniowy</label><input name="rental" value="0"></div>
+      <div class="field"><label>Inne potrącenia</label><input name="other" value="0"></div>
+      <div class="field"><label>Status</label><select name="status"><option value="AKTYWNY">Aktywny</option><option value="NIEAKTYWNY">Nieaktywny</option><option value="ARCHIWALNY">Archiwalny</option></select></div>
+      <div class="field"><label>Schemat</label><select name="scheme_type"><option value="BRAK">Brak</option><option value="UMOWA_ZLECENIA">Umowa zlecenia</option><option value="B2B">B2B</option></select></div>
+    </div><br><button class="btn primary">Dodaj kierowcę</button></form></div>
+    """)
+
 @app.route("/drivers")
 def drivers():
     q=request.args.get("q","").strip()
@@ -697,19 +770,20 @@ def drivers():
     sql="SELECT * FROM drivers WHERE 1=1"; params=[]
     if q:
         sql+=" AND (driver_name LIKE ? OR phone LIKE ? OR email LIKE ?)"; params += [f"%{q}%"]*3
-    if status=="active": sql+=" AND active=1"
-    if status=="inactive": sql+=" AND active=0"
+    if status=="active": sql+=" AND status='AKTYWNY'"
+    if status=="inactive": sql+=" AND status='NIEAKTYWNY'"
+    if status=="archived": sql+=" AND status='ARCHIWALNY'"
     sql+=" ORDER BY driver_name"
     with db() as c: rows=c.execute(sql,params).fetchall()
     return render("""
-    <h2>Kierowcy</h2>
+    <div class="row" style="justify-content:space-between"><h2>Kierowcy</h2><div class="row"><a class="btn primary" href="/drivers/new">+ Dodaj kierowcę</a><a class="btn" href="/drivers">Odśwież</a></div></div>
     <div class="card"><form class="grid g3">
       <div class="field"><label>Szukaj</label><input name="q" value="{{q}}" placeholder="Imię, nazwisko, telefon, e-mail"></div>
-      <div class="field"><label>Status</label><select name="status"><option value="all">Wszyscy</option><option value="active" {% if status=='active' %}selected{% endif %}>Aktywni</option><option value="inactive" {% if status=='inactive' %}selected{% endif %}>Nieaktywni</option></select></div>
+      <div class="field"><label>Status</label><select name="status"><option value="all">Wszyscy</option><option value="active" {% if status=='active' %}selected{% endif %}>Aktywni</option><option value="inactive" {% if status=='inactive' %}selected{% endif %}>Nieaktywni</option><option value="archived" {% if status=='archived' %}selected{% endif %}>Archiwalni</option></select></div>
       <div class="field"><label>&nbsp;</label><button class="btn primary">Szukaj</button></div>
     </form></div>
     <div class="card"><table><tr><th>Kierowca</th><th>Telefon</th><th>E-mail</th><th>Samochód</th><th>Status</th><th></th></tr>
-    {% for d in rows %}<tr><td><b>{{d.driver_name}}</b></td><td>{{d.phone}}</td><td>{{d.email}}</td><td>{{d.car}}</td><td><span class="badge {{'on' if d.active else 'off'}}">{{'Aktywny' if d.active else 'Nieaktywny'}}</span></td><td><a class="btn" href="/drivers/{{d.driver_key}}">Otwórz</a></td></tr>{% endfor %}
+    {% for d in rows %}<tr><td><b>{{d.driver_name}}</b></td><td>{{d.phone}}</td><td>{{d.email}}</td><td>{{d.car}}</td><td>{% if d.status=='ARCHIWALNY' %}<span class="badge arch">Archiwalny</span>{% elif d.status=='NIEAKTYWNY' %}<span class="badge off">Nieaktywny</span>{% else %}<span class="badge on">Aktywny</span>{% endif %}</td><td><a class="btn" href="/drivers/{{d.driver_key}}">Otwórz</a></td></tr>{% endfor %}
     </table></div>
     """,rows=rows,q=q,status=status)
 
@@ -933,7 +1007,7 @@ def exact_daily_rental(weekly_rate, weekday):
 def ensure_scheduled_costs_for_period(start_date, end_date, driver_keys=None):
     with db() as c:
         params = []
-        sql = "SELECT * FROM drivers WHERE active=1"
+        sql = "SELECT * FROM drivers WHERE active=1 AND status='AKTYWNY'"
         if driver_keys:
             placeholders = ",".join("?" for _ in driver_keys)
             sql += f" AND driver_key IN ({placeholders})"
@@ -1047,10 +1121,10 @@ def ensure_scheduled_costs_for_period(start_date, end_date, driver_keys=None):
                 installment_number = existing_count + 1
                 created_cost = add_scheduled_cost(
                     c, "RATA_TYGODNIOWA", plan["id"], plan["driver_key"], monday,
-                    f"Rata {installment_number} z {total_installments}: {plan['title']}",
+                    f"{plan['title']} — rata {installment_number}/{total_installments}",
                     amount,
                     "POTRĄCENIE",
-                    f"{plan['category']} — rata {installment_number} z {total_installments}",
+                    (f"{plan['category']} {amount:.2f} zł {installment_number}/{total_installments}" + (f" — {plan['note']}" if plan['note'] else "")),
                     installment_number=installment_number,
                     installment_total=total_installments,
                 )
@@ -1099,7 +1173,7 @@ def driver(key):
             UPDATE drivers SET
               phone=?,email=?,car=?,bank_account=?,
               partner_commission=?,rental=?,other=?,
-              deposit_amount=?,accident_debt=?,active=?,notes=?,
+              deposit_amount=?,accident_debt=?,active=?,status=?,notes=?,
               scheme_type=?,monthly_zus=?,zus_day=?,rental_start_date=?,
               updated_at=?
             WHERE driver_key=?
@@ -1113,7 +1187,8 @@ def driver(key):
                 num(request.form.get("other")),
                 num(request.form.get("deposit_amount")),
                 num(request.form.get("accident_debt")),
-                1 if request.form.get("active") else 0,
+                1 if request.form.get("status","AKTYWNY") == "AKTYWNY" else 0,
+                request.form.get("status","AKTYWNY"),
                 request.form.get("notes",""),
                 request.form.get("scheme_type","BRAK"),
                 num(request.form.get("monthly_zus")),
@@ -1156,6 +1231,7 @@ def driver(key):
     current_draft=latest_draft_for_driver(key)
     latest_saved=latest_saved_settlement_for_driver(key)
     next_installment=next_installment_total(key)
+    collision_remaining=sum(plan_remaining(p) for p in plans if p["category"] in ("SZKODA","DŁUG") and not p["cancelled_at"])
 
     return render("""
     <div class="row" style="justify-content:space-between">
@@ -1169,6 +1245,17 @@ def driver(key):
         <b class="{{'pos' if balance >= 0 else 'neg'}}">{{money(balance)}}</b>
         <small class="muted">Korekty oczekujące minus pozostałe raty</small>
       </div>
+    </div>
+
+    <div class="grid g4" style="margin-top:14px">
+      <div class="card metric"><span class="muted">Status</span><b style="font-size:18px">{{d.status}}</b></div>
+      <div class="card metric"><span class="muted">Aktualne saldo</span><b>{{money(balance)}}</b></div>
+      <div class="card metric"><span class="muted">Kaucja zatrzymana</span><b>{{money(deposit_summary.held)}}</b></div>
+      <div class="card metric"><span class="muted">Kolizje / długi</span><b>{{money(collision_remaining)}}</b></div>
+      <div class="card metric"><span class="muted">Samochód</span><b style="font-size:18px">{{d.car or "Brak"}}</b></div>
+      <div class="card metric"><span class="muted">Schemat</span><b style="font-size:18px">{{d.scheme_type}}</b></div>
+      <div class="card metric"><span class="muted">Ostatnie rozliczenie</span><b style="font-size:18px">{% if latest_saved %}{{latest_saved.week_end}}{% else %}Brak{% endif %}</b></div>
+      <div class="card metric"><span class="muted">Do wypłaty</span><b>{{money(current_draft.payable if current_draft else (latest_saved.payable if latest_saved else 0))}}</b></div>
     </div>
 
     <div class="tabs">
@@ -1267,8 +1354,7 @@ def driver(key):
         <input type="hidden" name="deposit_amount" value="{{deposit_summary.paid}}">
       </div>
       <div class="field"><label>Notatki</label><textarea name="notes">{{d.notes}}</textarea></div>
-      <p><label><input type="checkbox" name="active" {% if d.active %}checked{% endif %}> Aktywny w rozliczeniach</label></p>
-      <button class="btn primary">Zapisz profil</button>
+      <div class="field"><label>Status kierowcy</label><select name="status"><option value="AKTYWNY" {% if d.status=='AKTYWNY' %}selected{% endif %}>Aktywny</option><option value="NIEAKTYWNY" {% if d.status=='NIEAKTYWNY' %}selected{% endif %}>Nieaktywny</option><option value="ARCHIWALNY" {% if d.status=='ARCHIWALNY' %}selected{% endif %}>Archiwalny</option></select></div><br><button class="btn primary">Zapisz profil</button>
     </form></div>
 
     {% endif %}
@@ -1434,7 +1520,7 @@ def driver(key):
       <form method="post" action="/drivers/{{d.driver_key}}/installments/add">
         <div class="grid g3">
           <div class="field"><label>Nazwa</label><input name="title" placeholder="np. Kaucja" required></div>
-          <div class="field"><label>Kategoria</label><select name="category"><option value="KAUCJA">KAUCJA</option><option value="SZKODA">SZKODA / WYPADEK</option><option value="DŁUG">INNY DŁUG</option></select></div>
+          <div class="field"><label>Kategoria</label><select name="category"><option value="KAUCJA">KAUCJA</option><option value="SZKODA">KOLIZJA / SZKODA</option><option value="DŁUG">INNY DŁUG</option></select></div>
           <div class="field"><label>Cała kwota, zł</label><input name="total_amount" type="number" min="0.01" step="0.01" required></div>
           <div class="field"><label>Wpłacono wcześniej / gotówką, zł</label><input name="initial_paid" type="number" min="0" step="0.01" value="0"></div>
           <div class="field"><label>Rata tygodniowa, zł</label><input name="weekly_amount" type="number" min="0.01" step="0.01" required></div>
@@ -1453,13 +1539,9 @@ def driver(key):
         <td>{{p.title}}</td><td>{{p.category}}</td><td>{{money(p.total_amount)}}</td>
         <td>{{money(p.initial_paid)}}</td><td>{{money(p.paid_from_settlements)}}</td>
         <td><b>{{money(plan_remaining(p))}}</b></td><td>{{money(p.weekly_amount)}}</td>
-        <td>{{'Aktywny' if p.active and plan_remaining(p)>0 else 'Zakończony / wyłączony'}}</td>
+        <td>{% if p.cancelled_at %}Anulowany{% elif p.active and plan_remaining(p)>0 %}Aktywny{% elif plan_remaining(p)<=0 %}Spłacony{% else %}Wstrzymany{% endif %}</td>
         <td>
-          {% if p.active and plan_remaining(p)>0 %}
-          <form method="post" action="/drivers/{{d.driver_key}}/installments/{{p.id}}/toggle"><button class="btn">Wstrzymaj</button></form>
-          {% elif plan_remaining(p)>0 %}
-          <form method="post" action="/drivers/{{d.driver_key}}/installments/{{p.id}}/toggle"><button class="btn primary">Wznów</button></form>
-          {% endif %}
+          <div class="row">{% if p.active and plan_remaining(p)>0 %}<form method="post" action="/drivers/{{d.driver_key}}/installments/{{p.id}}/toggle"><button class="btn">Wstrzymaj</button></form>{% elif plan_remaining(p)>0 and not p.cancelled_at %}<form method="post" action="/drivers/{{d.driver_key}}/installments/{{p.id}}/toggle"><button class="btn primary">Wznów</button></form>{% endif %}{% if not p.cancelled_at and plan_remaining(p)>0 %}<form method="post" action="/drivers/{{d.driver_key}}/installments/{{p.id}}/cancel" onsubmit="return confirm('Anulować ten plan?')"><button class="btn danger">Anuluj</button></form>{% endif %}</div>
         </td>
       </tr>
       {% endfor %}</table>
@@ -1482,7 +1564,7 @@ def driver(key):
         <input type="hidden" name="accident_debt" value="{{d.accident_debt}}">
         <input type="hidden" name="notes" value="{{d.notes}}">
         <input type="hidden" name="rental_start_date" value="{{d.rental_start_date}}">
-        {% if d.active %}<input type="hidden" name="active" value="1">{% endif %}
+        <input type="hidden" name="status" value="{{d.status}}">
         <div class="grid g3">
           <div class="field">
             <label>Rodzaj umowy</label>
@@ -1515,6 +1597,7 @@ def driver(key):
     current_draft=current_draft,
     latest_saved=latest_saved,
     next_installment=next_installment,
+    collision_remaining=collision_remaining,
     total_gross=sum(float(r["gross"] or 0) for r in history),
     total_transfer=sum(float(r["transfer"] or 0) for r in history),
     total_payable=sum(float(r["payable"] or 0) for r in history)
@@ -1587,6 +1670,21 @@ def add_installment_plan(key):
     flash("Plan ratalny został dodany.")
     return redirect(url_for("driver",key=key,tab="recurring"))
 
+
+
+@app.route("/drivers/<key>/installments/<int:plan_id>/cancel", methods=["POST"])
+def cancel_installment_plan(key, plan_id):
+    with db() as c:
+        plan=c.execute("SELECT * FROM installment_plans WHERE id=? AND driver_key=?",(plan_id,key)).fetchone()
+        if not plan:
+            flash("Nie znaleziono planu.")
+            return redirect(url_for("driver",key=key,tab="recurring"))
+        c.execute("UPDATE installment_plans SET active=0,cancelled_at=?,cancel_comment=? WHERE id=?",(datetime.now().isoformat(timespec="seconds"),"Anulowano ręcznie",plan_id))
+        pending=c.execute("""SELECT dc.id FROM scheduled_occurrences so JOIN driver_costs dc ON dc.id=so.cost_id WHERE so.kind='RATA_TYGODNIOWA' AND so.source_id=? AND dc.applied_settlement_id IS NULL""",(plan_id,)).fetchall()
+        for row in pending: c.execute("DELETE FROM driver_costs WHERE id=?",(row['id'],))
+        log("Anulowano plan ratalny",f"{key}: {plan['title']}",connection=c)
+    flash("Plan został anulowany.")
+    return redirect(url_for("driver",key=key,tab="recurring"))
 
 @app.route("/drivers/<key>/installments/<int:plan_id>/toggle", methods=["POST"])
 def toggle_installment_plan(key,plan_id):
@@ -2232,7 +2330,7 @@ def new_settlement():
             calculated=[]
             for r in rows:
                 d=drivers[r["driver_key"]]
-                if not d["active"]:
+                if not d["active"] or d["status"] != "AKTYWNY":
                     continue
                 pending=c.execute(
                     "SELECT * FROM driver_costs "
@@ -2433,7 +2531,7 @@ def save_settlement():
 def history():
     with db() as c: rows=c.execute("SELECT * FROM settlements ORDER BY id DESC").fetchall()
     return render("""
-    <h2>Historia</h2>
+    <div class="row" style="justify-content:space-between"><h2>Historia</h2><a class="btn" href="/history">Odśwież</a></div>
     <div class="card">{% if rows %}<table><tr><th>ID</th><th>Okres</th><th>Brutto</th><th>Przelew</th><th>Do wypłaty</th><th>Status wypłat</th><th>Akcje</th></tr>
     {% for s in rows %}<tr>
       <td>#{{s.id}}</td>
@@ -2776,8 +2874,6 @@ def logs():
 def backup():
     return send_file(DB_PATH, as_attachment=True, download_name="go_partner.db")
 
-# Inicjalizacja bazy musi wykonać się także przy starcie przez Gunicorn/Render.
-# Gunicorn importuje moduł jako `app:app` i nie uruchamia bloku __main__.
 init_db()
 
 if __name__=="__main__":
