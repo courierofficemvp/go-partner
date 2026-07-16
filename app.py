@@ -37,7 +37,7 @@ BASE_HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GO PARTNER Manager 4.24 ISO WEEK FIX</title>
+<title>GO PARTNER Manager 4.25 CYKLICZNE FIX</title>
 <style>
 :root{--bg:#f4f6fa;--panel:#fff;--line:#e5e7eb;--text:#111827;--muted:#6b7280;--blue:#2563eb;--red:#b91c1c;--green:#166534}
 *{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
@@ -1098,18 +1098,21 @@ def ensure_scheduled_costs_for_period(start_date, end_date, driver_keys=None):
                 )
                 monday += timedelta(days=7)
 
-        # Plany ratalne — rata w każdy poniedziałek.
+        # Plany ratalne — dokładnie jedna rata za każdy rozliczany tydzień.
+        # Ważne: jeżeli plan utworzono np. we wtorek, a CSV dotyczy tego samego
+        # tygodnia (poniedziałek–niedziela), rata nadal musi zostać naliczona.
         plans = c.execute("""
-        SELECT * FROM installment_plans WHERE active=1
+        SELECT * FROM installment_plans
+        WHERE active=1 AND COALESCE(cancelled_at,'')=''
         """).fetchall()
         for plan in plans:
             if driver_keys and plan["driver_key"] not in driver_keys:
                 continue
+
             created = datetime.fromisoformat(plan["created_at"]).date()
-            first = max(start_date, created)
-            monday = first + timedelta(days=(7 - first.weekday()) % 7)
-            if first.weekday() == 0:
-                monday = first
+            if created > end_date:
+                # Plan powstał dopiero po rozliczanym okresie.
+                continue
 
             pending_amount = c.execute("""
             SELECT COALESCE(SUM(dc.amount),0)
@@ -1137,22 +1140,32 @@ def ensure_scheduled_costs_for_period(start_date, end_date, driver_keys=None):
             WHERE kind='RATA_TYGODNIOWA' AND source_id=?
             """, (plan["id"],)).fetchone()[0]
 
-            while monday <= end_date and available > 0:
-                amount = min(float(plan["weekly_amount"]), available)
-                installment_number = existing_count + 1
-                created_cost = add_scheduled_cost(
-                    c, "RATA_TYGODNIOWA", plan["id"], plan["driver_key"], monday,
-                    f"{plan['title']} — rata {installment_number}/{total_installments}",
-                    amount,
-                    "POTRĄCENIE",
-                    (f"{plan['category']} {amount:.2f} zł {installment_number}/{total_installments}" + (f" — {plan['note']}" if plan['note'] else "")),
-                    installment_number=installment_number,
-                    installment_total=total_installments,
-                )
-                if created_cost:
-                    available -= amount
-                    existing_count += 1
-                monday += timedelta(days=7)
+            # Rozliczenie może obejmować więcej niż tydzień, dlatego iterujemy
+            # po poniedziałkach należących do okresu. Dla standardowego CSV
+            # tygodniowego powstanie dokładnie jedna rata.
+            week_monday = start_date - timedelta(days=start_date.weekday())
+            while week_monday <= end_date and available > 0:
+                week_sunday = week_monday + timedelta(days=6)
+                if created <= week_sunday:
+                    amount = min(weekly_amount, available)
+                    installment_number = existing_count + 1
+                    created_cost = add_scheduled_cost(
+                        c, "RATA_TYGODNIOWA", plan["id"], plan["driver_key"], week_monday,
+                        f"{plan['title']} — rata {installment_number}/{total_installments}",
+                        amount,
+                        "POTRĄCENIE",
+                        (
+                            f"{plan['category']} {amount:.2f} zł "
+                            f"{installment_number}/{total_installments}"
+                            + (f" — {plan['note']}" if plan['note'] else "")
+                        ),
+                        installment_number=installment_number,
+                        installment_total=total_installments,
+                    )
+                    if created_cost:
+                        available -= amount
+                        existing_count += 1
+                week_monday += timedelta(days=7)
 
 
 def save_current_draft(rows, week_start, week_end):
