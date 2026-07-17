@@ -37,7 +37,7 @@ BASE_HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GO PARTNER Manager 4.26 CANCELLED PLANS FIX</title>
+<title>GO PARTNER Manager 4.27 MOBILE</title>
 <style>
 :root{--bg:#f4f6fa;--panel:#fff;--line:#e5e7eb;--text:#111827;--muted:#6b7280;--blue:#2563eb;--red:#b91c1c;--green:#166534}
 *{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
@@ -49,19 +49,64 @@ BASE_HTML = """
 table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}th{background:#f8fafc}.right{text-align:right}
 .badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:700}.on{background:#dcfce7;color:#166534}.off{background:#fee2e2;color:#991b1b}.arch{background:#e5e7eb;color:#374151}.login-wrap{max-width:420px;margin:8vh auto}.progress{height:10px;background:#e5e7eb;border-radius:999px;overflow:hidden}.progress span{display:block;height:100%;background:#2563eb}
 .flash{padding:10px 14px;border-radius:9px;background:#dbeafe;margin-bottom:12px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.tabs{display:flex;gap:8px;border-bottom:1px solid var(--line);margin:14px 0}.tabs a{padding:10px 12px;text-decoration:none;color:#374151}.tabs a.active{color:var(--blue);border-bottom:2px solid var(--blue);font-weight:700}.pos{color:#166534;font-weight:700}.neg{color:#b91c1c;font-weight:700}
-@media(max-width:900px){.app{grid-template-columns:1fr}.g4,.g3,.g2{grid-template-columns:1fr}}
+.mobile-top{display:none}.mobile-menu-btn{border:0;background:#17345d;color:#fff;border-radius:9px;padding:9px 12px;font-size:16px;cursor:pointer}
+.table-scroll{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{min-width:720px}
+.card table{margin:0}
+body.menu-open{overflow:hidden}
+@media(max-width:900px){
+  .app{display:block;min-height:100vh}
+  .mobile-top{display:flex;position:sticky;top:0;z-index:1200;align-items:center;justify-content:space-between;background:#0b1b33;color:#fff;padding:10px 14px;box-shadow:0 2px 10px rgba(0,0,0,.18)}
+  .mobile-top .mobile-brand{font-weight:800;font-size:16px}
+  .side{position:fixed;left:-280px;top:0;bottom:0;width:270px;z-index:1300;padding:20px;transition:left .22s ease;overflow-y:auto;box-shadow:6px 0 18px rgba(0,0,0,.28)}
+  body.menu-open .side{left:0}
+  .side-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1250}
+  body.menu-open .side-overlay{display:block}
+  .main{padding:14px}
+  .g4,.g3,.g2{grid-template-columns:1fr}
+  .grid{gap:10px}
+  .card{padding:13px;border-radius:12px;margin-bottom:10px}
+  .metric b{font-size:21px}
+  h1,h2{font-size:22px;margin-top:8px}
+  h3{font-size:18px}
+  .row{align-items:stretch}
+  .row>.btn,.row>form,.row>form>.btn{width:100%}
+  .btn{min-height:42px;text-align:center;display:flex;align-items:center;justify-content:center}
+  input,select,textarea{font-size:16px;min-height:44px}
+  textarea{min-height:100px}
+  .tabs{overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;padding-bottom:2px}
+  .tabs a{flex:0 0 auto;padding:10px}
+  .card{overflow:hidden}
+  .card table{display:block;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;min-width:0}
+  table{min-width:760px}
+  th,td{white-space:nowrap;padding:9px;font-size:13px}
+  .login-wrap{max-width:none;margin:5vh 12px}
+}
+@media(max-width:520px){
+  .main{padding:10px}
+  .card{padding:11px}
+  .mobile-top{padding:9px 10px}
+  .metric b{font-size:19px}
+  h2{font-size:20px}
+  .flash{font-size:14px}
+}
 </style>
 </head>
 <body>
+<div class="mobile-top">
+  <div class="mobile-brand">GO PARTNER</div>
+  <button class="mobile-menu-btn" type="button" onclick="toggleMobileMenu()">☰ Menu</button>
+</div>
+<div class="side-overlay" onclick="toggleMobileMenu(false)"></div>
 <div class="app">
-<aside class="side">
-<div class="logo">GO PARTNER<br><small>Manager 4.21 ING BANK</small></div>
-<a href="/">Dashboard</a>
-<a href="/drivers">Kierowcy</a>
-<a href="/settlements/new">Nowe rozliczenie</a>
-<a href="/history">Historia</a>
-<a href="/logs">Logi</a>
-<a href="/logout">Wyloguj</a>
+<aside class="side" id="mobileSide">
+<div class="logo">GO PARTNER<br><small>Manager 4.27 MOBILE</small></div>
+<a href="/" onclick="toggleMobileMenu(false)">Dashboard</a>
+<a href="/drivers" onclick="toggleMobileMenu(false)">Kierowcy</a>
+<a href="/settlements/new" onclick="toggleMobileMenu(false)">Nowe rozliczenie</a>
+<a href="/history" onclick="toggleMobileMenu(false)">Historia</a>
+<a href="/logs" onclick="toggleMobileMenu(false)">Logi</a>
+<a href="/logout" onclick="toggleMobileMenu(false)">Wyloguj</a>
 </aside>
 <main class="main">
 {% with messages = get_flashed_messages() %}
@@ -70,6 +115,20 @@ table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px s
 {{ content|safe }}
 </main>
 </div>
+<script>
+function toggleMobileMenu(forceState){
+  const shouldOpen = typeof forceState === "boolean"
+    ? forceState
+    : !document.body.classList.contains("menu-open");
+  document.body.classList.toggle("menu-open", shouldOpen);
+}
+document.addEventListener("keydown", function(event){
+  if(event.key === "Escape"){ toggleMobileMenu(false); }
+});
+window.addEventListener("resize", function(){
+  if(window.innerWidth > 900){ toggleMobileMenu(false); }
+});
+</script>
 </body>
 </html>
 """

@@ -1,15 +1,24 @@
-GO PARTNER Manager 4.23 ADMIN & ARCHIVE
+GO PARTNER Manager 4.27 MOBILE
 
-Login: admin
-Hasło: admin
+ADAPTACJA MOBILNA
 
 Dodano:
-- autoryzację,
-- anulowanie planów cyklicznych,
-- status Archiwalny,
-- poprawioną walidację ING z PL,
-- przyciski Odśwież,
-- ręczne dodawanie kierowcy,
-- Kaucja / Kolizja w cyklicznych,
-- komentarze rat np. KOLIZJA 250,00 zł 1/12,
-- podsumowanie profilu kierowcy.
+- mobilny pasek górny,
+- menu otwierane przyciskiem,
+- zamykanie menu po kliknięciu poza menu,
+- zamykanie klawiszem Escape,
+- układ jednej kolumny na telefonie,
+- większe przyciski i pola formularzy,
+- poziome przewijanie szerokich tabel,
+- przewijane zakładki profilu kierowcy,
+- poprawione odstępy na małych ekranach,
+- poprawiony ekran logowania.
+
+WAŻNE
+Ta aktualizacja zmienia tylko interfejs.
+Nie zmienia struktury ani logiki bazy danych.
+
+Jeżeli aplikacja nadal używa lokalnego SQLite na darmowym Render,
+dane mogą zostać usunięte przy deployu lub restarcie.
+Do trwałego przechowywania należy przejść na zewnętrzną bazę PostgreSQL,
+np. Neon Free.
