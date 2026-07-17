@@ -1,24 +1,19 @@
-GO PARTNER Manager 4.27 MOBILE
+GO PARTNER Manager 5.0 POSTGRESQL / NEON
 
-ADAPTACJA MOBILNA
+Ta wersja używa PostgreSQL w Neon przez zmienną DATABASE_URL.
+Nie używa pliku go_partner.db.
 
-Dodano:
-- mobilny pasek górny,
-- menu otwierane przyciskiem,
-- zamykanie menu po kliknięciu poza menu,
-- zamykanie klawiszem Escape,
-- układ jednej kolumny na telefonie,
-- większe przyciski i pola formularzy,
-- poziome przewijanie szerokich tabel,
-- przewijane zakładki profilu kierowcy,
-- poprawione odstępy na małych ekranach,
-- poprawiony ekran logowania.
+RENDER
+1. Environment musi zawierać DATABASE_URL i SECRET_KEY.
+2. Build Command: pip install -r requirements.txt
+3. Start Command: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
 
-WAŻNE
-Ta aktualizacja zmienia tylko interfejs.
-Nie zmienia struktury ani logiki bazy danych.
+TEST TRWAŁOŚCI
+1. Po wdrożeniu otwórz /system/database.
+2. Dodaj jednego testowego kierowcę.
+3. W Render wykonaj Manual Deploy -> Deploy latest commit.
+4. Sprawdź, czy kierowca nadal istnieje.
 
-Jeżeli aplikacja nadal używa lokalnego SQLite na darmowym Render,
-dane mogą zostać usunięte przy deployu lub restarcie.
-Do trwałego przechowywania należy przejść na zewnętrzną bazę PostgreSQL,
-np. Neon Free.
+UWAGA O PLIKACH
+Załączniki potwierdzeń zwrotu kaucji nadal są zapisywane lokalnie w uploads/.
+Na darmowym Render mogą zniknąć po restarcie. Dane finansowe i rekordy w Neon pozostają.

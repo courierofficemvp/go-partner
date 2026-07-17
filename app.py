@@ -6,7 +6,7 @@ import io
 import json
 import os
 import re
-import sqlite3
+import psycopg
 import unicodedata
 from datetime import datetime, date, timedelta
 import calendar
@@ -23,7 +23,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 
 APP_DIR = Path(__file__).resolve().parent
-DB_PATH = APP_DIR / "go_partner.db"
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 UPLOAD_DIR = APP_DIR / "uploads" / "deposit_returns"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_RETURN_FILES = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
@@ -37,7 +37,7 @@ BASE_HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GO PARTNER Manager 4.27 MOBILE</title>
+<title>GO PARTNER Manager 5.0 POSTGRESQL</title>
 <style>
 :root{--bg:#f4f6fa;--panel:#fff;--line:#e5e7eb;--text:#111827;--muted:#6b7280;--blue:#2563eb;--red:#b91c1c;--green:#166534}
 *{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
@@ -100,7 +100,7 @@ body.menu-open{overflow:hidden}
 <div class="side-overlay" onclick="toggleMobileMenu(false)"></div>
 <div class="app">
 <aside class="side" id="mobileSide">
-<div class="logo">GO PARTNER<br><small>Manager 4.27 MOBILE</small></div>
+<div class="logo">GO PARTNER<br><small>Manager 5.0 POSTGRESQL</small></div>
 <a href="/" onclick="toggleMobileMenu(false)">Dashboard</a>
 <a href="/drivers" onclick="toggleMobileMenu(false)">Kierowcy</a>
 <a href="/settlements/new" onclick="toggleMobileMenu(false)">Nowe rozliczenie</a>
@@ -133,29 +133,190 @@ window.addEventListener("resize", function(){
 </html>
 """
 
+AUTO_ID_TABLES = {
+    "driver_costs", "recurring_rules", "installment_plans",
+    "installment_charges", "settlement_drafts", "settlement_draft_rows",
+    "deposit_returns", "scheduled_occurrences", "settlements",
+    "settlement_rows", "logs",
+}
+
+
+class DBRow:
+    """Wiersz zgodny ze sposobem użycia sqlite3.Row: indeks i nazwa kolumny."""
+    def __init__(self, values, columns):
+        self._values = tuple(values)
+        self._columns = tuple(columns)
+        self._mapping = dict(zip(self._columns, self._values))
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._values[key]
+        return self._mapping[key]
+
+    def __getattr__(self, key):
+        try:
+            return self._mapping[key]
+        except KeyError as exc:
+            raise AttributeError(key) from exc
+
+    def keys(self):
+        return self._mapping.keys()
+
+    def items(self):
+        return self._mapping.items()
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self):
+        return len(self._values)
+
+
+class DBCursor:
+    def __init__(self, cursor, lastrowid=None, cached_rows=None):
+        self._cursor = cursor
+        self.lastrowid = lastrowid
+        self._cached_rows = list(cached_rows or [])
+        self.rowcount = cursor.rowcount
+
+    def _columns(self):
+        if not self._cursor.description:
+            return []
+        return [item.name for item in self._cursor.description]
+
+    def _convert(self, row):
+        if row is None:
+            return None
+        if isinstance(row, DBRow):
+            return row
+        return DBRow(row, self._columns())
+
+    def fetchone(self):
+        if self._cached_rows:
+            return self._cached_rows.pop(0)
+        return self._convert(self._cursor.fetchone())
+
+    def fetchall(self):
+        rows = self._cached_rows
+        self._cached_rows = []
+        rows.extend(self._convert(row) for row in self._cursor.fetchall())
+        return rows
+
+
+class DBConnection:
+    def __init__(self):
+        if not DATABASE_URL:
+            raise RuntimeError(
+                "Brak DATABASE_URL. Dodaj w Render Environment connection string z Neon."
+            )
+        self._connection = psycopg.connect(DATABASE_URL)
+
+    @staticmethod
+    def _translate(sql):
+        translated = sql.strip()
+        if translated.upper().startswith("PRAGMA "):
+            return ""
+        translated = re.sub(
+            r"INSERT\s+OR\s+IGNORE\s+INTO",
+            "INSERT INTO",
+            translated,
+            flags=re.IGNORECASE,
+        )
+        translated = translated.replace(
+            "INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY"
+        )
+        translated = re.sub(r"\bREAL\b", "DOUBLE PRECISION", translated)
+        translated = translated.replace(
+            "SET paid_from_settlements=MAX(",
+            "SET paid_from_settlements=GREATEST(",
+        )
+        translated = translated.replace("?", "%s")
+        return translated
+
+    def execute(self, sql, params=()):
+        translated = self._translate(sql)
+        cursor = self._connection.cursor()
+        if not translated:
+            return DBCursor(cursor)
+
+        is_insert_ignore = bool(re.match(
+            r"\s*INSERT\s+OR\s+IGNORE\s+INTO", sql, flags=re.IGNORECASE
+        ))
+        if is_insert_ignore:
+            translated += " ON CONFLICT DO NOTHING"
+
+        table_match = re.match(
+            r"\s*INSERT\s+(?:OR\s+IGNORE\s+)?INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+            sql,
+            flags=re.IGNORECASE,
+        )
+        auto_table = table_match.group(1).lower() if table_match else None
+        wants_id = auto_table in AUTO_ID_TABLES and " RETURNING " not in translated.upper()
+        if wants_id:
+            translated += " RETURNING id"
+
+        cursor.execute(translated, tuple(params or ()))
+        lastrowid = None
+        cached = []
+        if wants_id and cursor.description:
+            raw = cursor.fetchone()
+            if raw is not None:
+                lastrowid = raw[0]
+                cached = []
+        return DBCursor(cursor, lastrowid=lastrowid, cached_rows=cached)
+
+    def executescript(self, script):
+        statements = []
+        current = []
+        for line in script.splitlines():
+            if line.strip().upper().startswith("PRAGMA "):
+                continue
+            current.append(line)
+        cleaned = "\n".join(current)
+        for statement in cleaned.split(";"):
+            statement = statement.strip()
+            if statement:
+                statements.append(statement)
+        for statement in statements:
+            self.execute(statement)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is None:
+                self._connection.commit()
+            else:
+                self._connection.rollback()
+        finally:
+            self._connection.close()
+        return False
+
+
 def db():
-    c = sqlite3.connect(
-        DB_PATH,
-        timeout=30.0,
-        isolation_level="DEFERRED",
-        check_same_thread=False,
-    )
-    c.row_factory = sqlite3.Row
-    c.execute("PRAGMA busy_timeout=30000")
-    c.execute("PRAGMA foreign_keys=ON")
-    return c
+    return DBConnection()
+
 
 def ensure_column(connection, table, name, definition):
-    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
-    if name not in columns:
-        connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
-
+    exists = connection.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema='public' AND table_name=? AND column_name=?
+        """,
+        (table, name),
+    ).fetchone()
+    if not exists:
+        safe_table = re.sub(r"[^a-zA-Z0-9_]", "", table)
+        safe_name = re.sub(r"[^a-zA-Z0-9_]", "", name)
+        pg_definition = re.sub(r"\bREAL\b", "DOUBLE PRECISION", definition)
+        connection.execute(
+            f"ALTER TABLE {safe_table} ADD COLUMN {safe_name} {pg_definition}"
+        )
 
 def init_db():
     with db() as c:
-        c.execute("PRAGMA journal_mode=WAL")
-        c.execute("PRAGMA synchronous=NORMAL")
-        c.execute("PRAGMA wal_autocheckpoint=1000")
         c.executescript("""
         CREATE TABLE IF NOT EXISTS drivers(
           driver_key TEXT PRIMARY KEY,
@@ -2970,7 +3131,7 @@ def delete_settlement(sid):
         for charge in charges:
             c.execute("""
             UPDATE installment_plans
-            SET paid_from_settlements=MAX(0,paid_from_settlements-?),active=1
+            SET paid_from_settlements=GREATEST(0,paid_from_settlements-?),active=1
             WHERE id=?
             """,(charge["amount"],charge["plan_id"]))
         c.execute("DELETE FROM installment_charges WHERE settlement_id=?",(sid,))
@@ -2994,7 +3155,45 @@ def logs():
 
 @app.route("/backup")
 def backup():
-    return send_file(DB_PATH, as_attachment=True, download_name="go_partner.db")
+    tables = [
+        "drivers", "driver_costs", "recurring_rules", "installment_plans",
+        "installment_charges", "settlement_drafts", "settlement_draft_rows",
+        "deposit_returns", "scheduled_occurrences", "settlements",
+        "settlement_rows", "bank_export_settings", "logs",
+    ]
+    payload = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "database": "PostgreSQL / Neon",
+        "tables": {},
+    }
+    with db() as c:
+        for table in tables:
+            rows = c.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
+            payload["tables"][table] = [dict(row.items()) for row in rows]
+    data = io.BytesIO(json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
+    data.seek(0)
+    return send_file(
+        data,
+        as_attachment=True,
+        download_name=f"go_partner_backup_{date.today().isoformat()}.json",
+        mimetype="application/json",
+    )
+
+
+@app.route("/system/database")
+def database_status():
+    with db() as c:
+        version = c.execute("SELECT version()").fetchone()[0]
+        driver_count = c.execute("SELECT COUNT(*) FROM drivers").fetchone()[0]
+    return render("""
+    <h2>Status bazy danych</h2>
+    <div class="card">
+      <p><span class="badge on">Połączono</span></p>
+      <p><b>Typ:</b> PostgreSQL / Neon</p>
+      <p><b>Kierowcy w bazie:</b> {{driver_count}}</p>
+      <p class="muted">{{version}}</p>
+    </div>
+    """, version=version, driver_count=driver_count)
 
 init_db()
 
