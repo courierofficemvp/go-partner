@@ -22,6 +22,7 @@ from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from xml.sax.saxutils import escape
 
 APP_DIR = Path(__file__).resolve().parent
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
@@ -2434,6 +2435,13 @@ def _pdf_money(value):
     return f"{float(value or 0):,.2f} zl".replace(",", " ")
 
 
+def _pdf_cell(value, style):
+    """Create a wrapping ReportLab cell and preserve manual line breaks."""
+    text = escape(str(value or "")).replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\n", "<br/>")
+    return Paragraph(text or "&#160;", style)
+
+
 @app.route("/drivers/<key>/settlements/<int:sid>/report.pdf")
 def driver_settlement_pdf(key, sid):
     with db() as c:
@@ -2583,18 +2591,58 @@ def driver_settlement_pdf(key, sid):
             str(cost["note"] or ""),
         ])
 
+    cost_header_style = ParagraphStyle(
+        "GPCostHeader",
+        parent=body_style,
+        fontName=font_name,
+        fontSize=7,
+        leading=9,
+        alignment=1,
+    )
+    cost_cell_style = ParagraphStyle(
+        "GPCostCell",
+        parent=body_style,
+        fontName=font_name,
+        fontSize=7,
+        leading=9,
+        splitLongWords=True,
+        wordWrap="LTR",
+    )
+    cost_amount_style = ParagraphStyle(
+        "GPCostAmount",
+        parent=cost_cell_style,
+        alignment=2,
+    )
+
+    wrapped_cost_data = []
+    for row_index, row in enumerate(cost_data):
+        if row_index == 0:
+            wrapped_cost_data.append([
+                _pdf_cell(value, cost_header_style) for value in row
+            ])
+        else:
+            wrapped_cost_data.append([
+                _pdf_cell(row[0], cost_cell_style),
+                _pdf_cell(row[1], cost_cell_style),
+                _pdf_cell(row[2], cost_cell_style),
+                _pdf_cell(row[3], cost_amount_style),
+                _pdf_cell(row[4], cost_cell_style),
+            ])
+
     cost_table = Table(
-        cost_data,
+        wrapped_cost_data,
         repeatRows=1,
-        colWidths=[48*mm, 18*mm, 25*mm, 25*mm, 60*mm],
+        colWidths=[43*mm, 16*mm, 25*mm, 25*mm, 67*mm],
+        hAlign="LEFT",
     )
     cost_table.setStyle(TableStyle([
-        ("FONTNAME", (0,0), (-1,-1), font_name),
-        ("FONTSIZE", (0,0), (-1,-1), 7),
         ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#E5E7EB")),
         ("GRID", (0,0), (-1,-1), 0.4, colors.HexColor("#9CA3AF")),
         ("VALIGN", (0,0), (-1,-1), "TOP"),
-        ("ALIGN", (3,1), (3,-1), "RIGHT"),
+        ("LEFTPADDING", (0,0), (-1,-1), 4),
+        ("RIGHTPADDING", (0,0), (-1,-1), 4),
+        ("TOPPADDING", (0,0), (-1,-1), 4),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
     ]))
     story.extend([cost_table, Spacer(1, 6 * mm)])
 
