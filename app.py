@@ -33,13 +33,15 @@ ALLOWED_RETURN_FILES = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "go-partner-admin-test-secret")
 
+GO_LOGO_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAfQAAAH0CAYAAADL1t+KAAAACXBIWXMAAAsTAAALEwEAmpwYAAAE8GlUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPD94cGFja2V0IGJlZ2luPSLvu78iIGlkPSJXNU0wTXBDZWhpSHpyZVN6TlRjemtjOWQiPz4gPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iQWRvYmUgWE1QIENvcmUgOS4xLWMwMDMgNzkuOTY5MGE4NywgMjAyNS8wMy8wNi0xOToxMjowMyAgICAgICAgIj4gPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4gPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvIiB4bWxuczpkYz0iaHR0cDovL3B1cmwub3JnL2RjL2VsZW1lbnRzLzEuMS8iIHhtbG5zOnBob3Rvc2hvcD0iaHR0cDovL25zLmFkb2JlLmNvbS9waG90b3Nob3AvMS4wLyIgeG1sbnM6eG1wTU09Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8iIHhtbG5zOnN0RXZ0PSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VFdmVudCMiIHhtcDpDcmVhdG9yVG9vbD0iQWRvYmUgUGhvdG9zaG9wIDI2LjExIChXaW5kb3dzKSIgeG1wOkNyZWF0ZURhdGU9IjIwMjUtMTItMTVUMjI6NDQ6MjIrMDE6MDAiIHhtcDpNb2RpZnlEYXRlPSIyMDI1LTEyLTE1VDIyOjQ0OjU0KzAxOjAwIiB4bXA6TWV0YWRhdGFEYXRlPSIyMDI1LTEyLTE1VDIyOjQ0OjU0KzAxOjAwIiBkYzpmb3JtYXQ9ImltYWdlL3BuZyIgcGhvdG9zaG9wOkNvbG9yTW9kZT0iMyIgeG1wTU06SW5zdGFuY2VJRD0ieG1wLmlpZDplYmQxOTgwYS1jMjczLWQ2NDUtOTEzZi1kMTdjMWFlMGM2OWMiIHhtcE1NOkRvY3VtZW50SUQ9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AUDQAQBBBwAEHQAQdAAQdABA0AEAQQcABB0ABB0AEHQAQNABAEEHAEG3EgBA0AEAQQcABB0AEHQAEHQAQNABAEEHAAQdAAQdABB0AEDQAQBBBwBBBwAEHQAQdABA0AFA0AEAQQcABB0AEHQAEHQAQNABAEEHAAQdAAQdABB0AEDQAQBBBwBBBwAEHQAQdABA0AFA0AEAQQcABB0AEHQAEHQAQNABAEEHAAQdAAQdABB0AEDQAQBBBwAEHQAEHQAQdABA0AEAQQcAQQcABB0AEHQAQNABQNABAEEHAAQdABB0ABB0AEDQAQBBBwAEHQAEHQAQdABA0AEAQQcAQQcABB0AEHQAQNABQNABAEEHAAQdABB0ABB0AEDQAQBBBwAEHQAEHQAQdABA0AEAQQcAQQcABB0AEHQAQNABQNCtBAAQdABA0AEAQQcABB0ABB0AEHQAQNABAEEHAEEHAAQdABB0AEDQAUDQAQBBBwAEHQAQdAAQdABA0AEAQQcABB0ABB0AEHQAQNABAEEHAEEHAAQdABB0AEDQAUDQAQBBBwAEHQAQdAAQdABA0AEAQQcABB0ABB0AEHQAQNABgJH7f+rZ280hzeu9AAAAAElFTkSuQmCC"
+
 BASE_HTML = """
 <!doctype html>
 <html lang="pl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GO PARTNER Manager 5.0 POSTGRESQL</title>
+<title>GO FLEET</title>
 <style>
 :root{--bg:#f4f6fa;--panel:#fff;--line:#e5e7eb;--text:#111827;--muted:#6b7280;--blue:#2563eb;--red:#b91c1c;--green:#166534}
 *{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
@@ -96,13 +98,13 @@ body.menu-open{overflow:hidden}
 </head>
 <body>
 <div class="mobile-top">
-  <div class="mobile-brand">GO PARTNER</div>
+  <div class="mobile-brand"><img src="{{ logo_data_uri }}" alt="GO!" style="height:34px;vertical-align:middle;margin-right:8px">GO FLEET</div>
   <button class="mobile-menu-btn" type="button" onclick="toggleMobileMenu()">☰ Menu</button>
 </div>
 <div class="side-overlay" onclick="toggleMobileMenu(false)"></div>
 <div class="app">
 <aside class="side" id="mobileSide">
-<div class="logo">GO PARTNER<br><small>Manager 5.0 POSTGRESQL</small></div>
+<div class="logo"><img src="{{ logo_data_uri }}" alt="GO!" style="width:76px;height:76px;object-fit:contain;display:block;margin-bottom:8px"><span style="font-size:22px">GO FLEET</span></div>
 <a href="/" onclick="toggleMobileMenu(false)">Dashboard</a>
 <a href="/drivers" onclick="toggleMobileMenu(false)">Kierowcy</a>
 <a href="/settlements/new" onclick="toggleMobileMenu(false)">Nowe rozliczenie</a>
@@ -511,7 +513,11 @@ def init_db():
 
 
 def render(content, **ctx):
-    return render_template_string(BASE_HTML, content=render_template_string(content, **ctx))
+    return render_template_string(
+        BASE_HTML,
+        content=render_template_string(content, logo_data_uri=GO_LOGO_DATA_URI, **ctx),
+        logo_data_uri=GO_LOGO_DATA_URI,
+    )
 
 def log(action, details="", connection=None):
     values = (
@@ -954,7 +960,7 @@ def login():
         flash("Nieprawidłowy login lub hasło.")
     return render("""
     <div class="login-wrap"><div class="card">
-      <h2>GO PARTNER</h2><p class="muted">Logowanie do systemu</p>
+      <div style="display:flex;align-items:center;gap:12px"><img src="{{ logo_data_uri }}" alt="GO!" style="width:64px;height:64px;object-fit:contain"><h2 style="margin:0">GO FLEET</h2></div><p class="muted">Logowanie do systemu</p>
       <form method="post">
         <div class="field"><label>Login</label><input name="login" required></div>
         <div class="field"><label>Hasło</label><input type="password" name="password" required></div><br>
@@ -1804,6 +1810,32 @@ def driver(key):
       </form>
     </div>
     <div class="card">
+      <h3>Dodaj kaucję ręcznie</h3>
+      <p class="muted">
+        Użyj tej opcji, gdy kierowca wpłacił całą kaucję od razu.
+        Nie zostanie utworzony plan ratalny ani cotygodniowe naliczenia.
+      </p>
+      <form method="post" action="/drivers/{{d.driver_key}}/deposit/manual">
+        <div class="grid g3">
+          <div class="field">
+            <label>Kwota kaucji, zł</label>
+            <input type="number" name="amount" min="0.01" step="0.01" required>
+          </div>
+          <div class="field">
+            <label>Data wpłaty</label>
+            <input type="date" name="payment_date" value="{{today}}" required>
+          </div>
+          <div class="field">
+            <label>Komentarz</label>
+            <input name="note" placeholder="np. pełna kaucja wpłacona gotówką">
+          </div>
+        </div>
+        <br>
+        <button class="btn primary">Dodaj pełną kaucję</button>
+      </form>
+    </div>
+
+    <div class="card">
       <h3>Zwrot kaucji</h3>
       <p class="muted">
         Dostępne do zwrotu: <b>{{money(deposit_summary.held)}}</b>.
@@ -1856,7 +1888,12 @@ def driver(key):
           <td>ZWROT KAUCJI</td>
           <td class="neg">-{{money(item.amount)}}</td>
           <td>{{item.method}}</td>
-          <td>{{item.comment}}</td>
+          <td>
+            <form method="post" action="/drivers/{{d.driver_key}}/deposit-return/{{item.id}}/comment">
+              <textarea name="comment" rows="2">{{item.comment}}</textarea>
+              <button class="btn" style="margin-top:6px">Zapisz komentarz</button>
+            </form>
+          </td>
           <td>
             {% if item.proof_filename %}
               <a class="btn" href="/deposit-return-proof/{{item.id}}">Pobierz</a>
@@ -1888,7 +1925,12 @@ def driver(key):
         <td>{{c.entry_type}}</td>
         <td class="{{'pos' if c.entry_type=='BONUS' else 'neg'}}">{{'+' if c.entry_type=='BONUS' else '-'}}{{money(c.amount)}}</td>
         <td>{{'Rozliczone' if c.applied_settlement_id else 'Oczekuje'}}</td>
-        <td>{{c.note}}</td>
+        <td>
+          <form method="post" action="/drivers/{{d.driver_key}}/costs/{{c.id}}/comment">
+            <textarea name="note" rows="2">{{c.note}}</textarea>
+            <button class="btn" style="margin-top:6px">Zapisz komentarz</button>
+          </form>
+        </td>
         <td>{% if not c.applied_settlement_id %}<form method="post" action="/drivers/{{d.driver_key}}/costs/{{c.id}}/delete" onsubmit="return confirm('Usunąć ten wpis?')"><button class="btn danger">Usuń</button></form>{% endif %}</td>
       </tr>
       {% endfor %}</table>
@@ -1916,13 +1958,19 @@ def driver(key):
     <div class="card">
       <h3>Aktywne i zakończone plany (bez anulowanych)</h3>
       {% if plans %}
-      <table><tr><th>Nazwa</th><th>Kategoria</th><th>Cała kwota</th><th>Wpłata początkowa</th><th>Pobrano z rozliczeń</th><th>Pozostało</th><th>Rata tygodniowa</th><th>Status</th><th></th></tr>
+      <table><tr><th>Nazwa</th><th>Kategoria</th><th>Cała kwota</th><th>Wpłata początkowa</th><th>Pobrano z rozliczeń</th><th>Pozostało</th><th>Rata tygodniowa</th><th>Status</th><th>Komentarz</th><th></th></tr>
       {% for p in plans %}
       <tr>
         <td>{{p.title}}</td><td>{{p.category}}</td><td>{{money(p.total_amount)}}</td>
         <td>{{money(p.initial_paid)}}</td><td>{{money(p.paid_from_settlements)}}</td>
         <td><b>{{money(plan_remaining(p))}}</b></td><td>{{money(p.weekly_amount)}}</td>
         <td>{% if p.cancelled_at %}Anulowany{% elif p.active and plan_remaining(p)>0 %}Aktywny{% elif plan_remaining(p)<=0 %}Spłacony{% else %}Wstrzymany{% endif %}</td>
+        <td>
+          <form method="post" action="/drivers/{{d.driver_key}}/installments/{{p.id}}/comment">
+            <textarea name="note" rows="2">{{p.note}}</textarea>
+            <button class="btn" style="margin-top:6px">Zapisz komentarz</button>
+          </form>
+        </td>
         <td>
           <div class="row">{% if p.active and plan_remaining(p)>0 %}<form method="post" action="/drivers/{{d.driver_key}}/installments/{{p.id}}/toggle"><button class="btn">Wstrzymaj</button></form>{% elif plan_remaining(p)>0 and not p.cancelled_at %}<form method="post" action="/drivers/{{d.driver_key}}/installments/{{p.id}}/toggle"><button class="btn primary">Wznów</button></form>{% endif %}{% if not p.cancelled_at and plan_remaining(p)>0 %}<form method="post" action="/drivers/{{d.driver_key}}/installments/{{p.id}}/cancel" onsubmit="return confirm('Anulować ten plan?')"><button class="btn danger">Anuluj</button></form>{% endif %}</div>
         </td>
@@ -2006,6 +2054,67 @@ def add_driver_cost(key):
     return redirect(url_for("driver",key=key,tab="costs"))
 
 
+@app.route("/drivers/<key>/costs/<int:cost_id>/comment", methods=["POST"])
+def update_driver_cost_comment(key, cost_id):
+    note = request.form.get("note", "").strip()
+    with db() as c:
+        row = c.execute(
+            "SELECT id FROM driver_costs WHERE id=? AND driver_key=?",
+            (cost_id, key),
+        ).fetchone()
+        if not row:
+            flash("Nie znaleziono wpisu.")
+            return redirect(url_for("driver", key=key, tab="costs"))
+        c.execute("UPDATE driver_costs SET note=? WHERE id=?", (note, cost_id))
+        log("Zmieniono komentarz kosztu", f"{key}: wpis #{cost_id}", connection=c)
+    flash("Komentarz został zapisany.")
+    return redirect(url_for("driver", key=key, tab="costs"))
+
+
+@app.route("/drivers/<key>/deposit/manual", methods=["POST"])
+def add_manual_deposit(key):
+    amount = num(request.form.get("amount"))
+    payment_date = request.form.get("payment_date") or date.today().isoformat()
+    note = request.form.get("note", "").strip()
+    if amount <= 0:
+        flash("Kwota kaucji musi być większa od zera.")
+        return redirect(url_for("driver", key=key, tab="costs"))
+
+    created_at = f"{payment_date}T12:00:00"
+    with db() as c:
+        driver_row = c.execute(
+            "SELECT 1 FROM drivers WHERE driver_key=?",
+            (key,),
+        ).fetchone()
+        if not driver_row:
+            flash("Nie znaleziono kierowcy.")
+            return redirect("/drivers")
+        c.execute("""
+        INSERT INTO installment_plans(
+          driver_key,title,category,total_amount,initial_paid,
+          paid_from_settlements,weekly_amount,active,note,created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?)
+        """, (
+            key,
+            "Kaucja wpłacona ręcznie",
+            "KAUCJA",
+            amount,
+            amount,
+            0,
+            amount,
+            0,
+            note,
+            created_at,
+        ))
+        log(
+            "Dodano pełną kaucję ręcznie",
+            f"{key}: {amount:.2f} zł; data {payment_date}",
+            connection=c,
+        )
+    flash("Pełna kaucja została dodana bez planu ratalnego.")
+    return redirect(url_for("driver", key=key, tab="costs"))
+
+
 @app.route("/drivers/<key>/costs/<int:cost_id>/delete", methods=["POST"])
 def delete_driver_cost(key,cost_id):
     deleted = False
@@ -2053,6 +2162,23 @@ def add_installment_plan(key):
     flash("Plan ratalny został dodany.")
     return redirect(url_for("driver",key=key,tab="recurring"))
 
+
+
+@app.route("/drivers/<key>/installments/<int:plan_id>/comment", methods=["POST"])
+def update_installment_comment(key, plan_id):
+    note = request.form.get("note", "").strip()
+    with db() as c:
+        plan = c.execute(
+            "SELECT id FROM installment_plans WHERE id=? AND driver_key=?",
+            (plan_id, key),
+        ).fetchone()
+        if not plan:
+            flash("Nie znaleziono planu.")
+            return redirect(url_for("driver", key=key, tab="recurring"))
+        c.execute("UPDATE installment_plans SET note=? WHERE id=?", (note, plan_id))
+        log("Zmieniono komentarz planu", f"{key}: plan #{plan_id}", connection=c)
+    flash("Komentarz planu został zapisany.")
+    return redirect(url_for("driver", key=key, tab="recurring"))
 
 
 @app.route("/drivers/<key>/installments/<int:plan_id>/cancel", methods=["POST"])
@@ -2151,6 +2277,26 @@ def add_deposit_return(key):
         )
 
     flash("Zwrot kaucji został zapisany.")
+    return redirect(url_for("driver", key=key, tab="costs"))
+
+
+@app.route("/drivers/<key>/deposit-return/<int:return_id>/comment", methods=["POST"])
+def update_deposit_return_comment(key, return_id):
+    comment = request.form.get("comment", "").strip()
+    with db() as c:
+        item = c.execute(
+            "SELECT id FROM deposit_returns WHERE id=? AND driver_key=?",
+            (return_id, key),
+        ).fetchone()
+        if not item:
+            flash("Nie znaleziono zwrotu kaucji.")
+            return redirect(url_for("driver", key=key, tab="costs"))
+        c.execute(
+            "UPDATE deposit_returns SET comment=? WHERE id=?",
+            (comment, return_id),
+        )
+        log("Zmieniono komentarz zwrotu kaucji", f"{key}: zwrot #{return_id}", connection=c)
+    flash("Komentarz zwrotu kaucji został zapisany.")
     return redirect(url_for("driver", key=key, tab="costs"))
 
 
@@ -2320,7 +2466,14 @@ def driver_settlement_detail(key, sid):
       </details>
       {% endif %}
 
-      <p style="margin-top:14px"><b>Komentarz do rozliczenia:</b> {{r.deduction_comment or "Brak"}}</p>
+      <form method="post" action="/drivers/{{d.driver_key}}/settlements/{{s.id}}/comment" style="margin-top:14px">
+        <div class="field">
+          <label><b>Komentarz do rozliczenia</b></label>
+          <textarea name="comment">{{r.deduction_comment}}</textarea>
+        </div>
+        <br>
+        <button class="btn">Zapisz komentarz</button>
+      </form>
     </div>
     <div class="row">
       <a class="btn primary" href="/drivers/{{d.driver_key}}/settlements/{{s.id}}/report">Raport dla kierowcy</a>
@@ -2332,6 +2485,27 @@ def driver_settlement_detail(key, sid):
     total_costs=total_costs,money=money
     )
 
+
+
+@app.route("/drivers/<key>/settlements/<int:sid>/comment", methods=["POST"])
+def update_settlement_comment(key, sid):
+    comment = request.form.get("comment", "").strip()
+    with db() as c:
+        row = c.execute("""
+        SELECT id FROM settlement_rows
+        WHERE settlement_id=? AND driver_key=?
+        """, (sid, key)).fetchone()
+        if not row:
+            flash("Nie znaleziono rozliczenia kierowcy.")
+            return redirect(url_for("driver", key=key, tab="settlements"))
+        c.execute("""
+        UPDATE settlement_rows
+        SET deduction_comment=?
+        WHERE settlement_id=? AND driver_key=?
+        """, (comment, sid, key))
+        log("Zmieniono komentarz rozliczenia", f"{key}: rozliczenie #{sid}", connection=c)
+    flash("Komentarz do rozliczenia został zapisany.")
+    return redirect(url_for("driver_settlement_detail", key=key, sid=sid))
 
 
 @app.route("/drivers/<key>/settlements/<int:sid>/report")
@@ -2516,7 +2690,7 @@ def driver_settlement_pdf(key, sid):
     )
 
     story = [
-        Paragraph("GO PARTNER - Rozliczenie kierowcy", title_style),
+        Paragraph("GO FLEET - Rozliczenie kierowcy", title_style),
         Paragraph(
             f"{d['driver_name']}<br/>{s['week_start']} - {s['week_end']}",
             body_style,
