@@ -8,7 +8,8 @@ import os
 import re
 import psycopg
 import unicodedata
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, time
+from zoneinfo import ZoneInfo
 import calendar
 import math
 from pathlib import Path
@@ -1270,6 +1271,26 @@ def exact_daily_rental(weekly_rate, weekday):
     return daily_cents / 100.0
 
 
+BUSINESS_TIMEZONE = ZoneInfo(os.environ.get("BUSINESS_TIMEZONE", "Europe/Warsaw"))
+RENTAL_MONDAY_CUTOFF = time(16, 0)
+
+
+def should_defer_monday_rental(occurrence_date, now=None):
+    """
+    Nie naliczaj bieżącego poniedziałku przed 16:00 czasu polskiego.
+
+    Dotyczy wyłącznie dziennego wynajmu samochodu. Historyczne poniedziałki
+    są naliczane normalnie, a po 16:00 poniedziałkowa pozycja może zostać
+    utworzona przy najbliższym uruchomieniu generatora kosztów.
+    """
+    current = now or datetime.now(BUSINESS_TIMEZONE)
+    return (
+        occurrence_date == current.date()
+        and occurrence_date.weekday() == 0
+        and current.time().replace(tzinfo=None) < RENTAL_MONDAY_CUTOFF
+    )
+
+
 def ensure_scheduled_costs_for_period(start_date, end_date, driver_keys=None):
     with db() as c:
         params = []
@@ -1294,6 +1315,8 @@ def ensure_scheduled_costs_for_period(start_date, end_date, driver_keys=None):
                     except ValueError:
                         pass
                 for day in iter_dates(rental_start, end_date):
+                    if should_defer_monday_rental(day):
+                        continue
                     amount = exact_daily_rental(weekly, day.weekday())
                     add_scheduled_cost(
                         c, "WYNAJEM_DZIENNY", 0, driver["driver_key"], day,
