@@ -482,6 +482,25 @@ def init_db():
         ensure_column(c, "drivers", "status", "TEXT DEFAULT 'AKTYWNY'")
         ensure_column(c, "installment_plans", "cancelled_at", "TEXT DEFAULT ''")
         ensure_column(c, "installment_plans", "cancel_comment", "TEXT DEFAULT ''")
+
+        # Indeksy dla najczęstszych zapytań profilu kierowcy i rozliczeń.
+        c.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_driver_costs_driver_pending
+          ON driver_costs(driver_key, applied_settlement_id, apply_next);
+        CREATE INDEX IF NOT EXISTS idx_driver_costs_driver_id
+          ON driver_costs(driver_key, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_settlement_rows_driver_settlement
+          ON settlement_rows(driver_key, settlement_id DESC);
+        CREATE INDEX IF NOT EXISTS idx_installment_plans_driver_active
+          ON installment_plans(driver_key, active, category);
+        CREATE INDEX IF NOT EXISTS idx_deposit_returns_driver_date
+          ON deposit_returns(driver_key, return_date DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_scheduled_occurrences_lookup
+          ON scheduled_occurrences(kind, source_id, driver_key, occurrence_date);
+        CREATE INDEX IF NOT EXISTS idx_installment_charges_settlement
+          ON installment_charges(settlement_id, driver_key);
+        """)
+
         c.execute("""
         INSERT OR IGNORE INTO bank_export_settings(
           id,source_account,payer_name,payer_address1,payer_address2,default_title
@@ -1457,41 +1476,121 @@ def driver(key):
                 datetime.now().isoformat(timespec="seconds"),
                 key,
             ))
-        log("Zapisano profil kierowcy",key)
+            log("Zapisano profil kierowcy", key, connection=c)
         flash("Profil zapisano.")
         return redirect(url_for("driver",key=key,tab="profile"))
 
-    monday_today = date.today() - timedelta(days=date.today().weekday())
-    ensure_scheduled_costs_for_period(monday_today, date.today(), [key])
-
+    # Profil kierowcy jest ładowany jednym połączeniem do PostgreSQL.
+    # Wcześniej każda funkcja pomocnicza otwierała osobne połączenie z Neon,
+    # co przy przełączaniu zakładek powodowało wielosekundowe opóźnienia.
     with db() as c:
         d=c.execute("SELECT * FROM drivers WHERE driver_key=?",(key,)).fetchone()
+        if not d:
+            flash("Nie znaleziono kierowcy.")
+            return redirect("/drivers")
+
         history=c.execute("""
         SELECT sr.*, s.week_start, s.week_end, s.created_at AS settlement_created
         FROM settlement_rows sr
         JOIN settlements s ON s.id=sr.settlement_id
         WHERE sr.driver_key=?
         ORDER BY s.week_start DESC, s.id DESC
-        """,(key,)).fetchall()
+        """,(key,)).fetchall() if tab == "settlements" else []
+
         costs=c.execute("""
         SELECT * FROM driver_costs
         WHERE driver_key=?
         ORDER BY id DESC
+        """,(key,)).fetchall() if tab == "costs" else []
+
+        plans=c.execute("""
+        SELECT * FROM installment_plans
+        WHERE driver_key=? AND COALESCE(cancelled_at,'')=''
+        ORDER BY active DESC,id DESC
         """,(key,)).fetchall()
 
-    if not d:
-        flash("Nie znaleziono kierowcy.")
-        return redirect("/drivers")
+        returns=c.execute("""
+        SELECT * FROM deposit_returns
+        WHERE driver_key=?
+        ORDER BY return_date DESC, id DESC
+        """,(key,)).fetchall()
 
-    plans=installment_plans_for_driver(key)
-    balance=current_driver_balance(key)
+        current_draft=c.execute("""
+        SELECT dr.*, d.week_start, d.week_end, d.created_at
+        FROM settlement_draft_rows dr
+        JOIN settlement_drafts d ON d.id=dr.draft_id
+        WHERE dr.driver_key=?
+        ORDER BY d.id DESC LIMIT 1
+        """,(key,)).fetchone()
+
+        latest_saved=c.execute("""
+        SELECT sr.*, s.week_start, s.week_end, s.created_at
+        FROM settlement_rows sr
+        JOIN settlements s ON s.id=sr.settlement_id
+        WHERE sr.driver_key=?
+        ORDER BY s.id DESC LIMIT 1
+        """,(key,)).fetchone()
+
+        pending_rows=c.execute("""
+        SELECT amount, entry_type FROM driver_costs
+        WHERE driver_key=? AND apply_next=1 AND applied_settlement_id IS NULL
+        """,(key,)).fetchall()
+
+    pending_balance=sum(
+        float(r["amount"] or 0) if r["entry_type"] == "BONUS"
+        else -float(r["amount"] or 0)
+        for r in pending_rows
+    )
+
     active_plan_remaining=sum(plan_remaining(p) for p in plans if p["active"])
-    deposit_summary=deposit_summary_for_driver(key)
-    damage_summary=damage_summary_for_driver(key)
-    current_draft=latest_draft_for_driver(key)
-    latest_saved=latest_saved_settlement_for_driver(key)
-    next_installment=next_installment_total(key)
-    collision_remaining=sum(plan_remaining(p) for p in plans if p["category"] in ("SZKODA","DŁUG") and not p["cancelled_at"])
+    active_weekly_amounts=[
+        min(float(p["weekly_amount"] or 0), plan_remaining(p))
+        for p in plans if p["active"] and plan_remaining(p) > 0
+    ]
+    next_installment=sum(amount for amount in active_weekly_amounts if amount > 0)
+
+    deposit_plans=[p for p in plans if p["category"] == "KAUCJA"]
+    deposit_total=sum(float(p["total_amount"] or 0) for p in deposit_plans)
+    deposit_initial=sum(float(p["initial_paid"] or 0) for p in deposit_plans)
+    deposit_from_settlements=sum(float(p["paid_from_settlements"] or 0) for p in deposit_plans)
+    deposit_paid=min(deposit_total, deposit_initial + deposit_from_settlements)
+    deposit_returned=sum(float(item["amount"] or 0) for item in returns)
+    deposit_summary={
+        "total": deposit_total,
+        "initial_paid": deposit_initial,
+        "paid_from_settlements": deposit_from_settlements,
+        "paid": deposit_paid,
+        "returned": deposit_returned,
+        "held": max(0.0, deposit_paid - deposit_returned),
+        "remaining": max(0.0, deposit_total - deposit_paid),
+        "plans_count": len(deposit_plans),
+        "returns": returns,
+    }
+
+    damage_plans=[p for p in plans if p["category"] in ("SZKODA", "DŁUG")]
+    damage_total=sum(float(p["total_amount"] or 0) for p in damage_plans)
+    damage_initial=sum(float(p["initial_paid"] or 0) for p in damage_plans)
+    damage_from_settlements=sum(float(p["paid_from_settlements"] or 0) for p in damage_plans)
+    damage_paid=min(damage_total, damage_initial + damage_from_settlements)
+    damage_summary={
+        "total": damage_total,
+        "initial_paid": damage_initial,
+        "paid_from_settlements": damage_from_settlements,
+        "paid": damage_paid,
+        "remaining": max(0.0, damage_total - damage_paid),
+        "plans_count": len(damage_plans),
+    }
+
+    if current_draft:
+        balance=float(current_draft["payable"] or 0)
+    elif latest_saved:
+        latest_value=float(latest_saved["payable"] or 0)
+        base=(latest_value if latest_value < 0 else 0.0) if int(latest_saved["is_paid"] or 0) == 1 else latest_value
+        balance=base + pending_balance
+    else:
+        balance=pending_balance
+
+    collision_remaining=damage_summary["remaining"]
 
     return render("""
     <div class="row" style="justify-content:space-between">
@@ -1849,7 +1948,7 @@ def driver(key):
     """,
     d=d,tab=tab,history=history,costs=costs,plans=plans,money=money,
     plan_remaining=plan_remaining,balance=balance,
-    pending_balance=pending_cost_balance(key),
+    pending_balance=pending_balance,
     active_plan_remaining=active_plan_remaining,
     deposit_summary=deposit_summary,
     damage_summary=damage_summary,
