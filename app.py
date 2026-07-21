@@ -529,6 +529,14 @@ def init_db():
         ensure_column(c, "drivers", "status", "TEXT DEFAULT 'AKTYWNY'")
         ensure_column(c, "installment_plans", "cancelled_at", "TEXT DEFAULT ''")
         ensure_column(c, "installment_plans", "cancel_comment", "TEXT DEFAULT ''")
+        ensure_column(c, "vehicle_rental_payments", "original_amount", "REAL DEFAULT 0")
+        ensure_column(c, "vehicle_rental_payments", "adjustment_comment", "TEXT DEFAULT ''")
+        ensure_column(c, "vehicle_rental_payments", "adjusted_at", "TEXT DEFAULT ''")
+        c.execute("""
+        UPDATE vehicle_rental_payments
+        SET original_amount=amount
+        WHERE COALESCE(original_amount,0)=0
+        """)
 
         # Indeksy dla najczęstszych zapytań profilu kierowcy i rozliczeń.
         c.executescript("""
@@ -1074,10 +1082,12 @@ def ensure_vehicle_rental_payments(as_of=None):
                         due = start
                     c.execute("""
                       INSERT OR IGNORE INTO vehicle_rental_payments(
-                        lease_id,period_start,period_end,due_date,amount,paid_amount,status,paid_at,created_at
-                      ) VALUES(?,?,?,?,?,0,'DO_ZAPLATY','',?)
+                        lease_id,period_start,period_end,due_date,amount,paid_amount,status,paid_at,created_at,
+                        original_amount,adjustment_comment,adjusted_at
+                      ) VALUES(?,?,?,?,?,0,'DO_ZAPLATY','',?,?,'','')
                     """, (lease.id, period_start.isoformat(), period_end.isoformat(),
-                          due.isoformat(), float(lease.amount or 0), now_text))
+                          due.isoformat(), float(lease.amount or 0), now_text,
+                          float(lease.amount or 0)))
                     cursor += timedelta(days=7)
                     guard += 1
             else:
@@ -1094,10 +1104,12 @@ def ensure_vehicle_rental_payments(as_of=None):
                         due = start
                     c.execute("""
                       INSERT OR IGNORE INTO vehicle_rental_payments(
-                        lease_id,period_start,period_end,due_date,amount,paid_amount,status,paid_at,created_at
-                      ) VALUES(?,?,?,?,?,0,'DO_ZAPLATY','',?)
+                        lease_id,period_start,period_end,due_date,amount,paid_amount,status,paid_at,created_at,
+                        original_amount,adjustment_comment,adjusted_at
+                      ) VALUES(?,?,?,?,?,0,'DO_ZAPLATY','',?,?,'','')
                     """, (lease.id, period_start.isoformat(), period_end.isoformat(),
-                          due.isoformat(), float(lease.amount or 0), now_text))
+                          due.isoformat(), float(lease.amount or 0), now_text,
+                          float(lease.amount or 0)))
                     cursor = _add_month(cursor)
                     guard += 1
 
@@ -1139,8 +1151,8 @@ def vehicle_leases():
     {% for e in extra_charges %}<tr><td>{{e.due_date}}</td><td><b>{{e.registration}}</b><br><span class="muted">{{e.make_model}}</span></td><td>{{e.owner_name}}</td><td>{{e.title}}</td><td>{{money(e.amount-e.paid_amount) if e.status!='ZAPLACONO' else money(e.amount)}}</td><td>{{e.note}}</td><td>{% if e.status=='ZAPLACONO' %}<span class="badge on">Zapłacono {{e.paid_at[:10]}}</span>{% elif e.due_date < today %}<span class="badge off">Po terminie</span>{% else %}<span class="badge arch">Do zapłaty</span>{% endif %}</td><td>{% if e.status!='ZAPLACONO' %}<form method="post" action="/vehicle-rental-extra-charges/{{e.id}}/pay" onsubmit="return confirm('Potwierdzić zapłatę {{money(e.amount-e.paid_amount)}}?')"><button class="btn primary">Zapłać</button></form>{% else %}—{% endif %}</td></tr>{% endfor %}</table>
     {% else %}<div class="muted">Brak dodatkowych kwot.</div>{% endif %}</div>
     <div class="card"><h3>Płatności i historia</h3>
-    {% if payments %}<table><tr><th>Termin</th><th>Auto</th><th>Właściciel</th><th>Okres</th><th>Kwota</th><th>Status</th><th>Akcja</th></tr>
-    {% for p in payments %}<tr><td>{{p.due_date}}</td><td><b>{{p.registration}}</b><br><span class="muted">{{p.make_model}}</span></td><td>{{p.owner_name}}</td><td>{{p.period_start}} – {{p.period_end}}</td><td>{{money(p.amount-p.paid_amount) if p.status!='ZAPLACONO' else money(p.amount)}}</td><td>{% if p.status=='ZAPLACONO' %}<span class="badge on">Zapłacono {{p.paid_at[:10]}}</span>{% elif p.due_date < today %}<span class="badge off">Po terminie</span>{% else %}<span class="badge arch">Do zapłaty</span>{% endif %}</td><td>{% if p.status!='ZAPLACONO' %}<form method="post" action="/vehicle-rental-payments/{{p.id}}/pay" onsubmit="return confirm('Potwierdzić zapłatę {{money(p.amount-p.paid_amount)}}?')"><button class="btn primary">Zapłać</button></form>{% else %}—{% endif %}</td></tr>{% endfor %}</table>
+    {% if payments %}<table><tr><th>Termin</th><th>Auto</th><th>Właściciel</th><th>Okres</th><th>Kwota</th><th>Korekta</th><th>Status</th><th>Akcja</th></tr>
+    {% for p in payments %}<tr><td>{{p.due_date}}</td><td><b>{{p.registration}}</b><br><span class="muted">{{p.make_model}}</span></td><td>{{p.owner_name}}</td><td>{{p.period_start}} – {{p.period_end}}</td><td><b>{{money(p.amount-p.paid_amount) if p.status!='ZAPLACONO' else money(p.amount)}}</b>{% if p.original_amount and p.original_amount != p.amount %}<br><span class="muted">Pierwotnie: {{money(p.original_amount)}}</span>{% endif %}</td><td>{% if p.adjustment_comment %}{{p.adjustment_comment}}{% if p.adjusted_at %}<br><span class="muted">{{p.adjusted_at[:16]}}</span>{% endif %}{% else %}—{% endif %}</td><td>{% if p.status=='ZAPLACONO' %}<span class="badge on">Zapłacono {{p.paid_at[:10]}}</span>{% elif p.due_date < today %}<span class="badge off">Po terminie</span>{% else %}<span class="badge arch">Do zapłaty</span>{% endif %}</td><td>{% if p.status!='ZAPLACONO' %}<div class="row"><a class="btn" href="/vehicle-rental-payments/{{p.id}}/adjust">Korekta</a><form method="post" action="/vehicle-rental-payments/{{p.id}}/pay" onsubmit="return confirm('Potwierdzić zapłatę {{money(p.amount-p.paid_amount)}}?')"><button class="btn primary">Zapłać</button></form></div>{% else %}—{% endif %}</td></tr>{% endfor %}</table>
     {% else %}<div class="muted">Brak płatności.</div>{% endif %}</div>
     """, leases=leases, payments=payments, extra_charges=extra_charges, money=money, today=date.today().isoformat())
 
@@ -1272,6 +1284,99 @@ def vehicle_rental_extra_charge_pay(charge_id):
             log("Zapłacono ręczną kwotę najmu", f"{charge.registration}: {charge.title}, {charge.amount:.2f} zł", connection=c)
     flash("Dodatkowa kwota została oznaczona jako zapłacona.")
     return redirect("/vehicle-leases")
+
+
+
+@app.route("/vehicle-rental-payments/<int:payment_id>/adjust", methods=["GET", "POST"])
+def vehicle_rental_payment_adjust(payment_id):
+    with db() as c:
+        payment = c.execute("""
+          SELECT p.*,l.registration,l.make_model,l.owner_name,l.frequency
+          FROM vehicle_rental_payments p
+          JOIN vehicle_leases l ON l.id=p.lease_id
+          WHERE p.id=?
+        """, (payment_id,)).fetchone()
+
+    if not payment:
+        flash("Nie znaleziono naliczenia.")
+        return redirect("/vehicle-leases")
+    if payment.status == "ZAPLACONO":
+        flash("Zapłaconego naliczenia nie można korygować.")
+        return redirect("/vehicle-leases")
+    if (payment.frequency or "").upper() != "TYGODNIOWO":
+        flash("Korekta jest dostępna tylko dla naliczeń tygodniowych.")
+        return redirect("/vehicle-leases")
+
+    if request.method == "POST":
+        new_amount = num(request.form.get("amount"))
+        comment = request.form.get("comment", "").strip()
+        if new_amount < 0:
+            flash("Kwota po korekcie nie może być ujemna.")
+            return redirect(url_for("vehicle_rental_payment_adjust", payment_id=payment_id))
+        if not comment:
+            flash("Komentarz do korekty jest obowiązkowy.")
+            return redirect(url_for("vehicle_rental_payment_adjust", payment_id=payment_id))
+
+        old_amount = float(payment.amount or 0)
+        now = datetime.now().isoformat(timespec="seconds")
+        original_amount = float(payment.original_amount or old_amount)
+
+        with db() as c:
+            current = c.execute(
+                "SELECT * FROM vehicle_rental_payments WHERE id=?",
+                (payment_id,),
+            ).fetchone()
+            if not current or current.status == "ZAPLACONO":
+                flash("Naliczenie zostało już zapłacone lub nie istnieje.")
+                return redirect("/vehicle-leases")
+
+            c.execute("""
+              UPDATE vehicle_rental_payments
+              SET amount=?, original_amount=?, adjustment_comment=?, adjusted_at=?
+              WHERE id=?
+            """, (new_amount, original_amount, comment, now, payment_id))
+            log(
+                "Korekta tygodniowego najmu pojazdu",
+                (
+                    f"{payment.registration}, {payment.period_start}-{payment.period_end}: "
+                    f"{old_amount:.2f} zł -> {new_amount:.2f} zł; {comment}"
+                ),
+                connection=c,
+            )
+
+        flash("Korekta tygodniowego naliczenia została zapisana.")
+        return redirect("/vehicle-leases")
+
+    return render("""
+    <div class="row" style="justify-content:space-between">
+      <h2>Korekta tygodniowego naliczenia</h2>
+      <a class="btn" href="/vehicle-leases">Powrót</a>
+    </div>
+    <div class="card">
+      <p><b>{{payment.registration}}</b>{% if payment.make_model %} — {{payment.make_model}}{% endif %}</p>
+      <p class="muted">
+        Właściciel: {{payment.owner_name}}<br>
+        Okres: {{payment.period_start}} – {{payment.period_end}}<br>
+        Aktualna kwota: <b>{{money(payment.amount)}}</b>
+      </p>
+      <form method="post">
+        <div class="grid g2">
+          <div class="field">
+            <label>Nowa kwota za tydzień, zł</label>
+            <input name="amount" type="number" min="0" step="0.01"
+                   value="{{'%.2f'|format(payment.amount)}}" required>
+          </div>
+          <div class="field">
+            <label>Komentarz do korekty</label>
+            <textarea name="comment" required
+              placeholder="np. Samochód był w serwisie przez 3 dni">{{payment.adjustment_comment}}</textarea>
+          </div>
+        </div>
+        <br>
+        <button class="btn primary">Zapisz korektę</button>
+      </form>
+    </div>
+    """, payment=payment, money=money)
 
 
 @app.route("/vehicle-rental-payments/<int:payment_id>/pay", methods=["POST"])
