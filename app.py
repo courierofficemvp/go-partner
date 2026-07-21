@@ -107,6 +107,7 @@ body.menu-open{overflow:hidden}
 <div class="logo"><img src="{{ logo_data_uri }}" alt="GO!" style="width:76px;height:76px;object-fit:contain;display:block;margin-bottom:8px"><span style="font-size:22px">GO FLEET</span></div>
 <a href="/" onclick="toggleMobileMenu(false)">Dashboard</a>
 <a href="/drivers" onclick="toggleMobileMenu(false)">Kierowcy</a>
+<a href="/vehicle-rentals" onclick="toggleMobileMenu(false)">Najem pojazdów</a>
 <a href="/settlements/new" onclick="toggleMobileMenu(false)">Nowe rozliczenie</a>
 <a href="/history" onclick="toggleMobileMenu(false)">Historia</a>
 <a href="/logs" onclick="toggleMobileMenu(false)">Logi</a>
@@ -141,7 +142,7 @@ AUTO_ID_TABLES = {
     "driver_costs", "recurring_rules", "installment_plans",
     "installment_charges", "settlement_drafts", "settlement_draft_rows",
     "deposit_returns", "scheduled_occurrences", "settlements",
-    "settlement_rows", "logs",
+    "settlement_rows", "logs", "rental_vehicles", "rental_obligations",
 }
 
 
@@ -464,8 +465,38 @@ def init_db():
         CREATE TABLE IF NOT EXISTS logs(
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           created_at TEXT NOT NULL,
-          action TEXT NOT NULL,
+          action TEXT DEFAULT '',
           details TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS rental_vehicles(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          registration TEXT NOT NULL,
+          make_model TEXT DEFAULT '',
+          owner_name TEXT NOT NULL,
+          owner_iban TEXT DEFAULT '',
+          driver_key TEXT DEFAULT '',
+          rent_amount REAL NOT NULL,
+          billing_period TEXT NOT NULL DEFAULT 'MIESIĘCZNIE',
+          due_day INTEGER DEFAULT 1,
+          start_date TEXT NOT NULL,
+          end_date TEXT DEFAULT '',
+          active INTEGER DEFAULT 1,
+          note TEXT DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS rental_obligations(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          vehicle_id INTEGER NOT NULL,
+          period_start TEXT NOT NULL,
+          period_end TEXT NOT NULL,
+          due_date TEXT NOT NULL,
+          amount REAL NOT NULL,
+          status TEXT NOT NULL DEFAULT 'DO_ZAPŁATY',
+          paid_at TEXT DEFAULT '',
+          payment_note TEXT DEFAULT '',
+          created_at TEXT NOT NULL,
+          UNIQUE(vehicle_id, period_start, period_end)
         );
         """)
         ensure_column(c, "drivers", "scheme_type", "TEXT DEFAULT 'BRAK'")
@@ -503,6 +534,10 @@ def init_db():
           ON scheduled_occurrences(kind, source_id, driver_key, occurrence_date);
         CREATE INDEX IF NOT EXISTS idx_installment_charges_settlement
           ON installment_charges(settlement_id, driver_key);
+        CREATE INDEX IF NOT EXISTS idx_rental_vehicles_active
+          ON rental_vehicles(active, registration);
+        CREATE INDEX IF NOT EXISTS idx_rental_obligations_status_due
+          ON rental_obligations(status, due_date, vehicle_id);
         """)
 
         c.execute("""
@@ -974,6 +1009,81 @@ def logout():
     session.clear()
     return redirect("/login")
 
+
+def _month_last_day(year, month):
+    return calendar.monthrange(year, month)[1]
+
+
+def _add_months(day, months=1):
+    month_index = day.year * 12 + (day.month - 1) + months
+    year, month_zero = divmod(month_index, 12)
+    month = month_zero + 1
+    return date(year, month, min(day.day, _month_last_day(year, month)))
+
+
+def ensure_vehicle_rental_obligations(until_date=None):
+    """Tworzy brakujące tygodniowe lub miesięczne zobowiązania najmu."""
+    until_date = until_date or date.today()
+    now_text = datetime.now().isoformat(timespec="seconds")
+    with db() as c:
+        vehicles = c.execute("SELECT * FROM rental_vehicles WHERE active=1 ORDER BY id").fetchall()
+        for vehicle in vehicles:
+            try:
+                start = datetime.strptime(vehicle["start_date"], "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                continue
+            end = until_date
+            if vehicle["end_date"]:
+                try:
+                    end = min(end, datetime.strptime(vehicle["end_date"], "%Y-%m-%d").date())
+                except ValueError:
+                    pass
+            if start > end:
+                continue
+
+            period = (vehicle["billing_period"] or "MIESIĘCZNIE").upper()
+            cursor = start
+            while cursor <= end:
+                if period == "TYGODNIOWO":
+                    period_start = cursor
+                    period_end = min(cursor + timedelta(days=6), end)
+                    due_date = period_start
+                    next_cursor = cursor + timedelta(days=7)
+                else:
+                    period_start = cursor
+                    natural_end = _add_months(cursor, 1) - timedelta(days=1)
+                    period_end = min(natural_end, end)
+                    due_day = min(max(int(vehicle["due_day"] or 1), 1), _month_last_day(period_start.year, period_start.month))
+                    due_date = date(period_start.year, period_start.month, due_day)
+                    if due_date < period_start:
+                        due_date = period_start
+                    next_cursor = _add_months(cursor, 1)
+
+                c.execute("""
+                INSERT OR IGNORE INTO rental_obligations(
+                  vehicle_id,period_start,period_end,due_date,amount,status,
+                  paid_at,payment_note,created_at
+                ) VALUES(?,?,?,?,?,'DO_ZAPŁATY','','',?)
+                """, (
+                    vehicle["id"], period_start.isoformat(), period_end.isoformat(),
+                    due_date.isoformat(), float(vehicle["rent_amount"] or 0), now_text,
+                ))
+                cursor = next_cursor
+
+
+def vehicle_rental_summary(connection):
+    active = connection.execute("SELECT COUNT(*) FROM rental_vehicles WHERE active=1").fetchone()[0]
+    due = connection.execute("""
+    SELECT COALESCE(SUM(amount),0) FROM rental_obligations
+    WHERE status='DO_ZAPŁATY'
+    """).fetchone()[0]
+    overdue = connection.execute("""
+    SELECT COALESCE(SUM(amount),0) FROM rental_obligations
+    WHERE status='DO_ZAPŁATY' AND due_date<?
+    """, (date.today().isoformat(),)).fetchone()[0]
+    return active, float(due or 0), float(overdue or 0)
+
+
 @app.route("/")
 def dashboard():
     with db() as c:
@@ -982,6 +1092,17 @@ def dashboard():
         payable=c.execute("SELECT COALESCE(SUM(total_payable),0) FROM settlements").fetchone()[0]
         fees=c.execute("SELECT COALESCE(SUM(partner_commission+rental+b2b_fee),0) FROM settlement_rows").fetchone()[0]
         recent=c.execute("SELECT * FROM settlements ORDER BY id DESC LIMIT 10").fetchall()
+    ensure_vehicle_rental_obligations()
+    with db() as c:
+        rental_active, rental_due, rental_overdue = vehicle_rental_summary(c)
+        rental_rows = c.execute("""
+        SELECT ro.*, rv.registration, rv.make_model, rv.owner_name
+        FROM rental_obligations ro
+        JOIN rental_vehicles rv ON rv.id=ro.vehicle_id
+        WHERE ro.status='DO_ZAPŁATY'
+        ORDER BY ro.due_date, rv.registration
+        LIMIT 10
+        """).fetchall()
     return render("""
     <div class="row" style="justify-content:space-between"><h2>Dashboard</h2><a class="btn" href="/">Odśwież</a></div>
     <div class="grid g4">
@@ -990,11 +1111,148 @@ def dashboard():
       <div class="card metric"><span class="muted">Do wypłaty razem</span><b>{{money(payable)}}</b></div>
       <div class="card metric"><span class="muted">Prowizje + wynajem</span><b>{{money(fees)}}</b></div>
     </div>
+    <div class="grid g3">
+      <div class="card metric"><span class="muted">Najem pojazdów — do zapłaty</span><b>{{money(rental_due)}}</b></div>
+      <div class="card metric"><span class="muted">Najem — po terminie</span><b class="{{'neg' if rental_overdue > 0 else 'pos'}}">{{money(rental_overdue)}}</b></div>
+      <div class="card metric"><span class="muted">Aktywne auta w najmie</span><b>{{rental_active}}</b></div>
+    </div>
+    <div class="card"><div class="row" style="justify-content:space-between"><h3>Najbliższe płatności najmu</h3><a class="btn" href="/vehicle-rentals">Otwórz moduł</a></div>
+    {% if rental_rows %}<table><tr><th>Auto</th><th>Właściciel</th><th>Okres</th><th>Termin</th><th>Kwota</th></tr>
+    {% for item in rental_rows %}<tr><td><b>{{item.registration}}</b> {{item.make_model}}</td><td>{{item.owner_name}}</td><td>{{item.period_start}} – {{item.period_end}}</td><td>{{item.due_date}}</td><td><b>{{money(item.amount)}}</b></td></tr>{% endfor %}</table>
+    {% else %}<div class="muted">Brak należności za najem.</div>{% endif %}</div>
     <div class="card"><h3>Ostatnie rozliczenia</h3>
     {% if recent %}<table><tr><th>Okres</th><th>Brutto</th><th>Przelew</th><th>Do wypłaty</th></tr>
     {% for s in recent %}<tr><td>{{s.week_start}} – {{s.week_end}}</td><td>{{money(s.total_gross)}}</td><td>{{money(s.total_transfer)}}</td><td>{{money(s.total_payable)}}</td></tr>{% endfor %}</table>
     {% else %}<div class="muted">Brak danych.</div>{% endif %}</div>
-    """, active=active,count=count,payable=payable,fees=fees,recent=recent,money=money)
+    """, active=active,count=count,payable=payable,fees=fees,recent=recent,money=money,
+       rental_active=rental_active,rental_due=rental_due,rental_overdue=rental_overdue,
+       rental_rows=rental_rows)
+
+
+
+@app.route("/vehicle-rentals", methods=["GET", "POST"])
+def vehicle_rentals():
+    if request.method == "POST":
+        registration = request.form.get("registration", "").strip().upper()
+        owner_name = request.form.get("owner_name", "").strip()
+        amount = num(request.form.get("rent_amount"))
+        start_date = request.form.get("start_date") or date.today().isoformat()
+        if not registration or not owner_name or amount <= 0:
+            flash("Wpisz rejestrację, właściciela i prawidłową kwotę najmu.")
+            return redirect("/vehicle-rentals")
+        with db() as c:
+            c.execute("""
+            INSERT INTO rental_vehicles(
+              registration,make_model,owner_name,owner_iban,driver_key,
+              rent_amount,billing_period,due_day,start_date,end_date,
+              active,note,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                registration, request.form.get("make_model", "").strip(), owner_name,
+                normalize_bank_account(request.form.get("owner_iban", "")),
+                request.form.get("driver_key", ""), amount,
+                request.form.get("billing_period", "MIESIĘCZNIE"),
+                int(request.form.get("due_day") or 1), start_date,
+                request.form.get("end_date", ""), 1,
+                request.form.get("note", "").strip(),
+                datetime.now().isoformat(timespec="seconds"),
+                datetime.now().isoformat(timespec="seconds"),
+            ))
+            log("Dodano pojazd w najmie", f"{registration}: {owner_name}, {amount:.2f} zł", connection=c)
+        ensure_vehicle_rental_obligations()
+        flash("Pojazd został dodany, a należność utworzona automatycznie.")
+        return redirect("/vehicle-rentals")
+
+    ensure_vehicle_rental_obligations()
+    with db() as c:
+        vehicles = c.execute("""
+        SELECT rv.*, d.driver_name
+        FROM rental_vehicles rv
+        LEFT JOIN drivers d ON d.driver_key=rv.driver_key
+        ORDER BY rv.active DESC, rv.registration
+        """).fetchall()
+        obligations = c.execute("""
+        SELECT ro.*, rv.registration, rv.make_model, rv.owner_name, rv.owner_iban
+        FROM rental_obligations ro
+        JOIN rental_vehicles rv ON rv.id=ro.vehicle_id
+        ORDER BY CASE WHEN ro.status='DO_ZAPŁATY' THEN 0 ELSE 1 END,
+                 ro.due_date DESC, ro.id DESC
+        LIMIT 200
+        """).fetchall()
+        drivers_list = c.execute("SELECT driver_key,driver_name FROM drivers WHERE active=1 ORDER BY driver_name").fetchall()
+        active_count, due_total, overdue_total = vehicle_rental_summary(c)
+    return render("""
+    <div class="row" style="justify-content:space-between"><h2>Najem pojazdów</h2><a class="btn" href="/vehicle-rentals">Odśwież</a></div>
+    <div class="grid g3">
+      <div class="card metric"><span class="muted">Do zapłaty</span><b>{{money(due_total)}}</b></div>
+      <div class="card metric"><span class="muted">Po terminie</span><b class="{{'neg' if overdue_total > 0 else 'pos'}}">{{money(overdue_total)}}</b></div>
+      <div class="card metric"><span class="muted">Aktywne auta</span><b>{{active_count}}</b></div>
+    </div>
+    <div class="card"><h3>Dodaj samochód w najmie</h3>
+      <form method="post"><div class="grid g3">
+        <div class="field"><label>Numer rejestracyjny</label><input name="registration" required></div>
+        <div class="field"><label>Marka i model</label><input name="make_model"></div>
+        <div class="field"><label>Właściciel</label><input name="owner_name" required></div>
+        <div class="field"><label>IBAN właściciela</label><input name="owner_iban" placeholder="PL..."></div>
+        <div class="field"><label>Przypisany kierowca</label><select name="driver_key"><option value="">Brak</option>{% for d in drivers_list %}<option value="{{d.driver_key}}">{{d.driver_name}}</option>{% endfor %}</select></div>
+        <div class="field"><label>Kwota najmu, zł</label><input type="number" min="0.01" step="0.01" name="rent_amount" required></div>
+        <div class="field"><label>Okres płatności</label><select name="billing_period"><option value="MIESIĘCZNIE">Miesięcznie</option><option value="TYGODNIOWO">Tygodniowo</option></select></div>
+        <div class="field"><label>Dzień płatności (miesięcznie)</label><input type="number" min="1" max="28" name="due_day" value="1"></div>
+        <div class="field"><label>Najem od</label><input type="date" name="start_date" value="{{today}}" required></div>
+        <div class="field"><label>Najem do (opcjonalnie)</label><input type="date" name="end_date"></div>
+        <div class="field"><label>Komentarz</label><input name="note"></div>
+      </div><br><button class="btn primary">Dodaj pojazd</button></form>
+    </div>
+    <div class="card"><h3>Samochody</h3>{% if vehicles %}<table><tr><th>Auto</th><th>Właściciel</th><th>Kierowca</th><th>Kwota</th><th>Okres</th><th>Status</th><th></th></tr>
+      {% for v in vehicles %}<tr><td><b>{{v.registration}}</b><br>{{v.make_model}}</td><td>{{v.owner_name}}<br><span class="muted">{{v.owner_iban}}</span></td><td>{{v.driver_name or 'Brak'}}</td><td>{{money(v.rent_amount)}}</td><td>{{v.billing_period}}</td><td>{% if v.active %}<span class="badge on">Aktywny</span>{% else %}<span class="badge arch">Nieaktywny</span>{% endif %}</td><td><form method="post" action="/vehicle-rentals/{{v.id}}/toggle"><button class="btn">{{'Wyłącz' if v.active else 'Włącz'}}</button></form></td></tr>{% endfor %}</table>{% else %}<div class="muted">Brak samochodów.</div>{% endif %}</div>
+    <div class="card"><h3>Należności i historia płatności</h3>{% if obligations %}<table><tr><th>Auto</th><th>Właściciel</th><th>Okres</th><th>Termin</th><th>Kwota</th><th>Status</th><th>Akcja</th></tr>
+      {% for o in obligations %}<tr><td><b>{{o.registration}}</b> {{o.make_model}}</td><td>{{o.owner_name}}</td><td>{{o.period_start}} – {{o.period_end}}</td><td>{{o.due_date}}</td><td><b>{{money(o.amount)}}</b></td><td>{% if o.status=='ZAPŁACONO' %}<span class="badge on">Zapłacono {{o.paid_at}}</span>{% else %}<span class="badge off">Do zapłaty</span>{% endif %}</td><td>{% if o.status!='ZAPŁACONO' %}<form method="post" action="/vehicle-rentals/obligations/{{o.id}}/pay" onsubmit="return confirm('Potwierdzić płatność {{money(o.amount)}}?')"><input name="payment_note" placeholder="Komentarz (opcjonalnie)"><button class="btn primary" style="margin-top:6px">Zapłać</button></form>{% else %}{{o.payment_note}}{% endif %}</td></tr>{% endfor %}</table>{% else %}<div class="muted">Brak należności.</div>{% endif %}</div>
+    """, vehicles=vehicles, obligations=obligations, drivers_list=drivers_list,
+       active_count=active_count, due_total=due_total, overdue_total=overdue_total,
+       today=date.today().isoformat(), money=money)
+
+
+@app.route("/vehicle-rentals/<int:vehicle_id>/toggle", methods=["POST"])
+def toggle_vehicle_rental(vehicle_id):
+    with db() as c:
+        vehicle = c.execute("SELECT * FROM rental_vehicles WHERE id=?", (vehicle_id,)).fetchone()
+        if not vehicle:
+            flash("Nie znaleziono pojazdu.")
+            return redirect("/vehicle-rentals")
+        new_active = 0 if vehicle["active"] else 1
+        c.execute("UPDATE rental_vehicles SET active=?,updated_at=? WHERE id=?", (
+            new_active, datetime.now().isoformat(timespec="seconds"), vehicle_id,
+        ))
+        log("Zmieniono status pojazdu w najmie", f"{vehicle['registration']}: {'aktywny' if new_active else 'nieaktywny'}", connection=c)
+    if new_active:
+        ensure_vehicle_rental_obligations()
+    flash("Status pojazdu został zmieniony.")
+    return redirect("/vehicle-rentals")
+
+
+@app.route("/vehicle-rentals/obligations/<int:obligation_id>/pay", methods=["POST"])
+def pay_vehicle_rental(obligation_id):
+    paid_at = datetime.now().isoformat(timespec="seconds")
+    with db() as c:
+        obligation = c.execute("""
+        SELECT ro.*, rv.registration FROM rental_obligations ro
+        JOIN rental_vehicles rv ON rv.id=ro.vehicle_id
+        WHERE ro.id=?
+        """, (obligation_id,)).fetchone()
+        if not obligation:
+            flash("Nie znaleziono należności.")
+            return redirect("/vehicle-rentals")
+        if obligation["status"] == "ZAPŁACONO":
+            flash("Ta należność została już zapłacona.")
+            return redirect("/vehicle-rentals")
+        c.execute("""
+        UPDATE rental_obligations
+        SET status='ZAPŁACONO',paid_at=?,payment_note=?
+        WHERE id=?
+        """, (paid_at, request.form.get("payment_note", "").strip(), obligation_id))
+        log("Zapłacono najem pojazdu", f"{obligation['registration']}: {float(obligation['amount']):.2f} zł, okres {obligation['period_start']}–{obligation['period_end']}", connection=c)
+    flash("Płatność zapisana. Licznik zadłużenia został pomniejszony.")
+    return redirect("/vehicle-rentals")
 
 
 @app.route("/drivers/new", methods=["GET", "POST"])
@@ -3503,7 +3761,8 @@ def backup():
         "drivers", "driver_costs", "recurring_rules", "installment_plans",
         "installment_charges", "settlement_drafts", "settlement_draft_rows",
         "deposit_returns", "scheduled_occurrences", "settlements",
-        "settlement_rows", "bank_export_settings", "logs",
+        "settlement_rows", "bank_export_settings", "rental_vehicles",
+        "rental_obligations", "logs",
     ]
     payload = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
